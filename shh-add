@@ -5,7 +5,7 @@ set -e
 
 # Ensure required arguments are provided
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 <file-path> [property-name] <aws-region>"
+  echo "Usage: $0 <file-path> [property-name] <aws-region> [--pub] [--fp]"
   exit 1
 fi
 
@@ -13,6 +13,16 @@ fi
 FILE_PATH="$1"
 PROPERTY_NAME="${2:-$(basename "$FILE_PATH")}"  # Default to filename if not provided
 AWS_REGION="${3:-us-east-1}"  # Default to us-east-1 if not provided
+UPLOAD_PUB=false
+UPLOAD_FP=false
+
+# Check if --pub or --fp flags are passed
+for arg in "$@"; do
+  case "$arg" in
+    --pub) UPLOAD_PUB=true ;;
+    --fp) UPLOAD_FP=true ;;
+  esac
+done
 
 # Ensure the file exists
 if [ ! -f "$FILE_PATH" ]; then
@@ -30,7 +40,7 @@ if [ -z "$EXISTING_SECRET" ]; then
 fi
 
 # Base64 encode the file content
-ENCODED_FILE_CONTENT=$(cat $FILE_PATH | base64 -w 0)
+ENCODED_FILE_CONTENT=$(cat "$FILE_PATH" | base64 -w 0)
 
 # Check if the property already exists in the secret
 if echo "$EXISTING_SECRET" | jq -e --arg key "$PROPERTY_NAME" 'has($key)' >/dev/null; then
@@ -41,6 +51,25 @@ fi
 
 # Merge new property into existing JSON
 UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg value "$ENCODED_FILE_CONTENT" '. + {($key): $value}')
+
+# If --pub flag is provided, also upload the .pub file
+if [ "$UPLOAD_PUB" = true ]; then
+  PUB_FILE="$FILE_PATH.pub"
+  if [ -f "$PUB_FILE" ]; then
+    ENCODED_PUB_CONTENT=$(cat "$PUB_FILE" | base64 -w 0)
+    UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.pub" --arg value "$ENCODED_PUB_CONTENT" '. + {($key): $value}')
+    echo "Public key '$PROPERTY_NAME.pub' added to secret."
+  else
+    echo "Warning: Public key file '$PUB_FILE' not found. Skipping upload."
+  fi
+fi
+
+# If --fp flag is provided, generate and upload the fingerprint
+if [ "$UPLOAD_FP" = true ]; then
+  SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
+  UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.fp" --arg value "$SSH_KEY_FP" '. + {($key): $value}')
+  echo "Fingerprint '$PROPERTY_NAME.fp' added to secret."
+fi
 
 # Store the updated JSON back in AWS Secrets Manager, suppressing output
 aws secretsmanager put-secret-value --secret-id "$SHH_SECRETS" --secret-string "$UPDATED_SECRET" >/dev/null 2>&1
