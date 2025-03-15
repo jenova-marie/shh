@@ -5,7 +5,7 @@ set -e
 
 # Ensure required arguments are provided
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 <file-path> [property-name] <aws-region> [--pub] [--fp]"
+  echo "Usage: $0 <file-path> [property-name] <aws-region> [--only]"
   exit 1
 fi
 
@@ -13,14 +13,15 @@ fi
 FILE_PATH="$1"
 PROPERTY_NAME="${2:-$(basename "$FILE_PATH")}"  # Default to filename if not provided
 AWS_REGION="${3:-us-east-1}"  # Default to us-east-1 if not provided
-UPLOAD_PUB=false
-UPLOAD_FP=false
+UPLOAD_PUB=true
+UPLOAD_FP=true
+ONLY_MODE=false
 
-# Check if --pub or --fp flags are passed
+# Check for --only flag
+shift 3 2>/dev/null || true  # Shift past required args if they exist
 for arg in "$@"; do
   case "$arg" in
-    --pub) UPLOAD_PUB=true ;;
-    --fp) UPLOAD_FP=true ;;
+    --only) ONLY_MODE=true; UPLOAD_PUB=false; UPLOAD_FP=false ;;
   esac
 done
 
@@ -31,13 +32,7 @@ if [ ! -f "$FILE_PATH" ]; then
 fi
 
 # Retrieve the existing secret JSON from AWS Secrets Manager
-EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SHH_SECRETS" --query SecretString --output text)
-
-# Check if retrieval was successful
-if [ -z "$EXISTING_SECRET" ]; then
-  echo "Error: Failed to retrieve secret '$SHH_SECRETS' from AWS Secrets Manager in region '$AWS_REGION'!"
-  exit 1
-fi
+EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SHH_SECRETS" --query SecretString --output text 2>/dev/null || echo '{}')
 
 # Base64 encode the file content
 ENCODED_FILE_CONTENT=$(cat "$FILE_PATH" | base64 -w 0)
@@ -52,11 +47,11 @@ fi
 # Merge new property into existing JSON
 UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg value "$ENCODED_FILE_CONTENT" '. + {($key): $value}')
 
-# If --pub flag is provided, also upload the .pub file
+# If not in --only mode, also upload the .pub file and fingerprint
 if [ "$UPLOAD_PUB" = true ]; then
   PUB_FILE="$FILE_PATH.pub"
   if [ -f "$PUB_FILE" ]; then
-    ENCODED_PUB_CONTENT=$(cat "$PUB_FILE" | base64 -w 0)
+    ENCODED_PUB_CONTENT=$(cat "$PUB_FILE")
     UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.pub" --arg value "$ENCODED_PUB_CONTENT" '. + {($key): $value}')
     echo "Public key '$PROPERTY_NAME.pub' added to secret."
   else
@@ -64,11 +59,14 @@ if [ "$UPLOAD_PUB" = true ]; then
   fi
 fi
 
-# If --fp flag is provided, generate and upload the fingerprint
 if [ "$UPLOAD_FP" = true ]; then
-  SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
-  UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.fp" --arg value "$SSH_KEY_FP" '. + {($key): $value}')
-  echo "Fingerprint '$PROPERTY_NAME.fp' added to secret."
+  if [ -f "$FILE_PATH.pub" ]; then
+    SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
+    UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.fp" --arg value "$SSH_KEY_FP" '. + {($key): $value}')
+    echo "Fingerprint '$PROPERTY_NAME.fp' added to secret."
+  else
+    echo "Warning: No public key file found for fingerprinting."
+  fi
 fi
 
 # Store the updated JSON back in AWS Secrets Manager, suppressing output
