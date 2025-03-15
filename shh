@@ -27,8 +27,8 @@ echo "RETRIEVING SHH_SECRETS: $AWS_REGION:$SHH_SECRETS#$JSON_KEY_NAME"
 # Retrieve the JSON secret from AWS Secrets Manager
 # keys must be base64 encoded to retain proper formatting within JSON
 SSH_PRIVATE_KEY=$(/usr/local/lib/summon/summon-aws-secrets "$SHH_SECRETS#$JSON_KEY_NAME" | base64 --decode ) # 2>/dev/null)
-SSH_PUBLIC_KEY=$(/usr/local/lib/summon/summon-aws-secrets "$SHH_SECRETS#${JSON_KEY_NAME}.pub" | base64 --decode ) # 2>/dev/null)
-
+SSH_PUBLIC_KEY=$(/usr/local/lib/summon/summon-aws-secrets "$SHH_SECRETS#${JSON_KEY_NAME}.pub" ) # 2>/dev/null)
+SSH_PUBLIC_KEY_FP=$(/usr/local/lib/summon/summon-aws-secrets "$SHH_SECRETS#${JSON_KEY_NAME}.fp" ) # 2>/dev/null)
 # Check if we successfully retrieved the secret
 if [ -z "$SSH_PRIVATE_KEY" ]; then
   echo "Error: Failed to retrieve secret $SHH_SECRETS from AWS Secrets Manager in region $AWS_REGION!"
@@ -36,10 +36,10 @@ if [ -z "$SSH_PRIVATE_KEY" ]; then
 fi
 
 # Extract public key fingerprint
-SSH_KEY_FP=$(echo "$SSH_PRIVATE_KEY" | ssh-keygen -lf - | awk '{print $2}')
+
 
 # Check if the key is already in ssh-agent
-if ! ssh-add -l | grep -q "$SSH_KEY_FP"; then
+if ! ssh-add -l | grep -q $SSH_PUBLIC_KEY_FP; then
   echo "$SSH_PRIVATE_KEY" | ssh-add - <<< "$SSH_PRIVATE_KEY"
 else
   echo "Key is already loaded in ssh-agent, skipping ssh-add."
