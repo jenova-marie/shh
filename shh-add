@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Exit on errors
+set -e
+
+# Ensure required arguments are provided
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <file-path> [property-name] <aws-region>"
+  exit 1
+fi
+
+# Parameters
+FILE_PATH="$1"
+PROPERTY_NAME="${2:-$(basename "$FILE_PATH")}"  # Default to filename if not provided
+AWS_REGION="${3:-us-east-1}"  # Default to us-east-1 if not provided
+
+# Ensure the file exists
+if [ ! -f "$FILE_PATH" ]; then
+  echo "Error: File '$FILE_PATH' not found!"
+  exit 1
+fi
+
+# Retrieve the existing secret JSON from AWS Secrets Manager
+EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SHH_SECRETS" --query SecretString --output text)
+
+# Check if retrieval was successful
+if [ -z "$EXISTING_SECRET" ]; then
+  echo "Error: Failed to retrieve secret '$SHH_SECRETS' from AWS Secrets Manager in region '$AWS_REGION'!"
+  exit 1
+fi
+
+# Base64 encode the file content
+ENCODED_FILE_CONTENT=$(cat $FILE_PATH | base64 -w 0)
+
+# Check if the property already exists in the secret
+if echo "$EXISTING_SECRET" | jq -e --arg key "$PROPERTY_NAME" 'has($key)' >/dev/null; then
+  echo "Property '$PROPERTY_NAME' already exists in secret '$SHH_SECRETS'. Overwriting..."
+else
+  echo "Adding new property '$PROPERTY_NAME' to secret '$SHH_SECRETS'."
+fi
+
+# Merge new property into existing JSON
+UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg value "$ENCODED_FILE_CONTENT" '. + {($key): $value}')
+
+# Store the updated JSON back in AWS Secrets Manager, suppressing output
+aws secretsmanager put-secret-value --secret-id "$SHH_SECRETS" --secret-string "$UPDATED_SECRET" >/dev/null 2>&1
+
+echo "Successfully updated secret '$SHH_SECRETS' with new property '$PROPERTY_NAME'."

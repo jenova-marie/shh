@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Exit on errors
+set -e
+
+# Function to check if a secret exists in AWS Secrets Manager
+check_secret() {
+  SECRET_NAME="$1"
+  aws secretsmanager describe-secret --secret-id "$SECRET_NAME" >/dev/null 2>&1 && return 0 || return 1
+}
+
+# Function to create a new secret
+create_secret() {
+  SECRET_NAME="$1"
+  echo "Creating new AWS Secret: $SECRET_NAME"
+  aws secretsmanager create-secret --name "$SECRET_NAME" --secret-string '{}' >/dev/null 2>&1
+  echo "Secret '$SECRET_NAME' created successfully."
+}
+
+# Function to list keys inside the secret
+list_keys() {
+  SECRET_NAME="$1"
+  SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --query SecretString --output text 2>/dev/null || echo '{}')
+  echo "Keys stored in '$SECRET_NAME':"
+  echo "$SECRET_JSON" | jq 'keys' || echo "(No keys found)"
+}
+
+# Prompt for the secret name
+read -p "Enter AWS Secret Manager Secret Name (default: $SHH_SECRETS): " SECRET_NAME
+SECRET_NAME=${SECRET_NAME:-$SHH_SECRETS}
+
+if check_secret "$SECRET_NAME"; then
+  echo "Secret '$SECRET_NAME' already exists."
+else
+  read -p "Secret '$SECRET_NAME' does not exist. Create it? (y/n): " CONFIRM
+  if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+    create_secret "$SECRET_NAME"
+  else
+    echo "Secret creation canceled. Exiting."
+    exit 1
+  fi
+fi
+
+# Ask if user wants to list existing keys
+read -p "Would you like to list stored keys in '$SECRET_NAME'? (y/n): " LIST_KEYS
+if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
+  list_keys "$SECRET_NAME"
+fi
+
+echo "Shh-admin operations completed."
