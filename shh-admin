@@ -16,6 +16,7 @@ usage() {
   echo "  -l, --list                List keys in the secret"
   echo "  -d, --detail KEY_NAME     Show details for a specific key"
   echo "  -c, --create              Create the secret if it doesn't exist, non-interactive mode"
+  echo "  -e, --env                 Manage environment variables with shh-env"
   echo "  --debug                   Enable verbose debugging output"
   echo ""
   echo "Environment variables (in order of precedence):"
@@ -33,6 +34,94 @@ debug_log() {
   fi
 }
 
+# Get the directory of the current script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Function to manage environment
+manage_environment() {
+  echo "Managing SHH environment variables..."
+  
+  # Check if shh-env exists and is executable
+  if [ ! -x "$SCRIPT_DIR/shh-env" ]; then
+    echo "Error: shh-env script not found or not executable."
+    return 1
+  }
+  
+  # First display current environment
+  "$SCRIPT_DIR/shh-env" --display
+  
+  # Ask if user wants to modify environment
+  echo ""
+  echo "Would you like to:"
+  echo "1) Set a new environment variable"
+  echo "2) Reset all environment variables to defaults"
+  echo "3) Persist current environment to shell config"
+  echo "4) Return to main menu"
+  echo ""
+  echo -n "Enter your choice [4]: "
+  read -r CHOICE
+  CHOICE=${CHOICE:-4}
+  
+  case "$CHOICE" in
+    1)
+      echo ""
+      echo "Available variables to set:"
+      echo "- SHH_REGION   (current region for AWS operations)"
+      echo "- SHH_SECRETS  (default secret name)"
+      echo "- SHH_DEBUG    (enable debug mode, true/false)"
+      echo ""
+      echo -n "Enter variable name to set: "
+      read -r VAR_NAME
+      
+      if [[ ! "$VAR_NAME" =~ ^SHH_ ]]; then
+        echo "Error: Only SHH_ prefixed variables can be set."
+        return 1
+      fi
+      
+      echo -n "Enter value for $VAR_NAME: "
+      read -r VAR_VALUE
+      
+      "$SCRIPT_DIR/shh-env" --set "$VAR_NAME=$VAR_VALUE"
+      
+      # Export in current session too
+      export "$VAR_NAME"="$VAR_VALUE"
+      
+      # Ask if user wants to persist
+      echo -n "Would you like to persist this change to your shell config? (y/n) [n]: "
+      read -r PERSIST
+      PERSIST=${PERSIST:-n}
+      
+      if [[ "$PERSIST" =~ ^[Yy]$ ]]; then
+        "$SCRIPT_DIR/shh-env" --persist
+      fi
+      ;;
+    2)
+      "$SCRIPT_DIR/shh-env" --reset
+      
+      # Export in current session too
+      export SHH_REGION="$DEFAULT_REGION"
+      export SHH_SECRETS="$DEFAULT_SECRET_NAME"
+      export SHH_DEBUG="false"
+      
+      # Ask if user wants to persist
+      echo -n "Would you like to persist these defaults to your shell config? (y/n) [n]: "
+      read -r PERSIST
+      PERSIST=${PERSIST:-n}
+      
+      if [[ "$PERSIST" =~ ^[Yy]$ ]]; then
+        "$SCRIPT_DIR/shh-env" --persist
+      fi
+      ;;
+    3)
+      "$SCRIPT_DIR/shh-env" --persist
+      ;;
+    4)
+      echo "Returning to main menu..."
+      ;;
+    *)
+      echo "Invalid choice. Returning to main menu..."
+      ;;
+  esac
 # Check dependencies
 check_dependencies() {
   for cmd in aws jq; do
