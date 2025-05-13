@@ -24,6 +24,7 @@ usage() {
   echo "  --only         Only upload the specified file, skip public key and fingerprint"
   echo "  --debug        Enable verbose debugging output"
   echo "  --no-ssh-add   Don't add the key to the SSH agent"
+  echo "  --env          Manage environment variables with shh-env"
   echo "  --help         Display this help message"
   echo ""
   echo "Environment variables (in order of precedence):"
@@ -60,10 +61,50 @@ check_dependencies() {
 
 # Function to check AWS credentials
 check_aws_credentials() {
-  if ! aws sts get-caller-identity --region "$1" >/dev/null 2>&1; then
-    echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+  local region="$1"
+  debug_log "Checking AWS credentials in region: $region"
+  
+  if $DEBUG_MODE; then
+    # Show the actual AWS command and output for debugging
+    echo "Running: aws sts get-caller-identity --region \"$region\""
+    if ! aws sts get-caller-identity --region "$region"; then
+      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+      return 1
+    fi
+  else
+    # Silent mode for normal operation
+    if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
+      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+      echo "Try running with --debug for more information." >&2
+      return 1
+    fi
+  fi
+  
+  debug_log "AWS credentials verified successfully"
+  return 0
+}
+
+# Get the directory of the current script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Function to manage environment
+manage_environment() {
+  echo "Managing SHH environment variables..."
+  
+  # Check if shh-env exists and is executable
+  if [ ! -x "$SCRIPT_DIR/shh-env" ]; then
+    echo "Error: shh-env script not found or not executable."
     return 1
   fi
+  
+  # Run shh-env to manage environment
+  "$SCRIPT_DIR/shh-env" "$@"
+  
+  # Re-export values after possible changes
+  export SHH_SECRETS="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
+  export SHH_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+  export AWS_DEFAULT_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+  
   return 0
 }
 
@@ -82,6 +123,12 @@ for arg in "$@"; do
   fi
   if [ "$arg" = "--no-ssh-add" ]; then
     ADD_TO_AGENT=false
+  fi
+  if [ "$arg" = "--env" ]; then
+    # Handle environment management and exit
+    shift # Remove the script name from args
+    manage_environment "$@"
+    exit $?
   fi
 done
 
@@ -229,9 +276,6 @@ if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_
   if $DEBUG_MODE; then
     admin_debug_flag="--debug"
   fi
-  
-  # Get the directory of the current script to find shh-admin
-  SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
   
   # Call shh-admin to create the secret
   if ! "$SCRIPT_DIR/shh-admin" --secret "$SECRET_NAME" --region "$REGION" --create $admin_debug_flag; then
