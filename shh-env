@@ -1,0 +1,226 @@
+#!/bin/bash
+
+# Exit on error
+set -e
+
+# Default values
+DEFAULT_REGION=${AWS_DEFAULT_REGION:-"us-east-2"}
+DEFAULT_SECRET_NAME="ssh-keys"
+DEBUG_MODE=false
+
+# Function to display usage
+usage() {
+  echo "Usage: $(basename "$0") [options]"
+  echo "Options:"
+  echo "  -h, --help                 Display this help message"
+  echo "  -d, --display              Display current environment configuration"
+  echo "  -s, --set KEY=VALUE        Set an environment variable"
+  echo "  -p, --persist              Persist environment to shell config"
+  echo "  --reset                    Reset all SHH environment variables to defaults"
+  echo "  --debug                    Enable verbose debugging output"
+  echo ""
+  echo "Examples:"
+  echo "  $(basename "$0") --display              # Show current SHH environment"
+  echo "  $(basename "$0") --set SHH_SECRETS=mysecrets   # Set secret name"
+  echo "  $(basename "$0") --set SHH_REGION=us-west-2    # Set region"
+  echo "  $(basename "$0") --persist              # Save settings to shell config"
+  exit 1
+}
+
+# Function for debug logging
+debug_log() {
+  if $DEBUG_MODE; then
+    echo "[DEBUG] $1"
+  fi
+}
+
+# Function to detect shell and config file
+detect_shell_config() {
+  local shell
+  shell=$(basename "$SHELL")
+  
+  debug_log "Detected shell: $shell"
+  
+  case "$shell" in
+    bash)
+      if [ -f "$HOME/.bashrc" ]; then
+        echo "$HOME/.bashrc"
+      elif [ -f "$HOME/.bash_profile" ]; then
+        echo "$HOME/.bash_profile"
+      else
+        echo "$HOME/.profile"
+      fi
+      ;;
+    zsh)
+      echo "$HOME/.zshrc"
+      ;;
+    *)
+      # Fallback for other shells
+      if [ -f "$HOME/.profile" ]; then
+        echo "$HOME/.profile"
+      else
+        echo ""
+      fi
+      ;;
+  esac
+}
+
+# Function to display current environment
+display_env() {
+  echo "Current SHH Environment Configuration:"
+  echo "-------------------------------------"
+  echo "SHH_REGION:   ${SHH_REGION:-"<not set, using ${AWS_REGION:-${AWS_DEFAULT_REGION:-$DEFAULT_REGION}} (default)"}"
+  echo "SHH_SECRETS:  ${SHH_SECRETS:-"<not set, using $DEFAULT_SECRET_NAME (default)"}"
+  echo "SHH_DEBUG:    ${SHH_DEBUG:-"<not set, defaulting to false>"}"
+  echo ""
+
+  # Show related AWS environment for context
+  echo "Related AWS Environment:"
+  echo "----------------------"
+  echo "AWS_REGION:          ${AWS_REGION:-"<not set>"}"
+  echo "AWS_DEFAULT_REGION:  ${AWS_DEFAULT_REGION:-"<not set>"}"
+  echo "AWS_PROFILE:         ${AWS_PROFILE:-"<not set>"}"
+  echo ""
+}
+
+# Function to set an environment variable
+set_env_var() {
+  local key_value="$1"
+  local key="${key_value%%=*}"
+  local value="${key_value#*=}"
+  
+  # Validate key starts with SHH_
+  if [[ ! "$key" =~ ^SHH_ ]]; then
+    echo "Error: Only SHH_ prefixed variables can be managed with this tool."
+    echo "Received: $key"
+    return 1
+  fi
+  
+  # Set the variable in the current session
+  export "$key"="$value"
+  echo "Set $key=$value for current session"
+  
+  return 0
+}
+
+# Function to persist environment to shell config
+persist_env() {
+  local config_file
+  config_file=$(detect_shell_config)
+  
+  if [ -z "$config_file" ]; then
+    echo "Error: Could not detect shell configuration file."
+    return 1
+  fi
+  
+  echo "Shell config file: $config_file"
+  
+  # Create backup
+  cp "$config_file" "$config_file.shh-backup.$(date +%Y%m%d%H%M%S)"
+  echo "Created backup: $config_file.shh-backup.$(date +%Y%m%d%H%M%S)"
+  
+  # Remove existing SHH_ entries
+  debug_log "Removing existing SHH_ entries"
+  sed -i.bak '/^export SHH_/d' "$config_file"
+  
+  # Add current SHH_ variables
+  echo "" >> "$config_file"
+  echo "# SHH environment variables - Updated $(date)" >> "$config_file"
+  
+  # Only add variables that are actually set
+  if [ -n "${SHH_REGION:-}" ]; then
+    echo "export SHH_REGION=\"$SHH_REGION\"" >> "$config_file"
+  fi
+  
+  if [ -n "${SHH_SECRETS:-}" ]; then
+    echo "export SHH_SECRETS=\"$SHH_SECRETS\"" >> "$config_file"
+  fi
+  
+  if [ -n "${SHH_DEBUG:-}" ]; then
+    echo "export SHH_DEBUG=\"$SHH_DEBUG\"" >> "$config_file"
+  fi
+  
+  echo "Updated $config_file with current SHH environment variables."
+  echo "Please run 'source $config_file' to apply changes to your current session."
+  
+  return 0
+}
+
+# Function to reset environment variables
+reset_env() {
+  # Unset all SHH_ variables
+  unset SHH_REGION
+  unset SHH_SECRETS
+  unset SHH_DEBUG
+  
+  # Set defaults
+  export SHH_REGION="$DEFAULT_REGION"
+  export SHH_SECRETS="$DEFAULT_SECRET_NAME"
+  export SHH_DEBUG="false"
+  
+  echo "Reset all SHH environment variables to defaults:"
+  display_env
+  
+  return 0
+}
+
+# Parse command line arguments
+if [ $# -eq 0 ]; then
+  usage
+fi
+
+DO_DISPLAY=false
+DO_PERSIST=false
+DO_RESET=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      ;;
+    -d|--display)
+      DO_DISPLAY=true
+      shift
+      ;;
+    -s|--set)
+      if [ -z "$2" ]; then
+        echo "Error: --set requires an argument in the format KEY=VALUE"
+        exit 1
+      fi
+      set_env_var "$2"
+      shift 2
+      ;;
+    -p|--persist)
+      DO_PERSIST=true
+      shift
+      ;;
+    --reset)
+      DO_RESET=true
+      shift
+      ;;
+    --debug)
+      DEBUG_MODE=true
+      export SHH_DEBUG="true"
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+  esac
+done
+
+# Handle command flags
+if $DO_RESET; then
+  reset_env
+fi
+
+if $DO_DISPLAY || ($DO_RESET == false && $DO_PERSIST == false); then
+  display_env
+fi
+
+if $DO_PERSIST; then
+  persist_env
+fi
+
+exit 0
