@@ -12,8 +12,9 @@ RED="\033[0;31m"
 BLUE="\033[0;34m"
 NC="\033[0m" # No Color
 
-# Repository URL - Change this to your actual repo URL before distribution
-REPO_URL="https://github.com/your-username/shh.git"
+# Repository URLs
+SSH_REPO_URL="git@github.com:jenova-marie/shh.git"
+HTTPS_REPO_URL="https://github.com/jenova-marie/shh.git"
 INSTALL_DIR="/usr/local/share/shh"
 BIN_DIR="/usr/local/bin"
 LOG_FILE="/var/log/shh.log"
@@ -96,17 +97,33 @@ check_dependencies() {
   log_message "All dependencies found!"
 }
 
-# Function to clone the repository
+# Function to clone the repository, trying SSH first and falling back to HTTPS
 clone_repo() {
-  log_message "Cloning Shh repository from $REPO_URL..."
-  
-  if ! git clone "$REPO_URL" "$TEMP_DIR/shh"; then
-    log_message "Error: Failed to clone repository."
-    echo "Please check the repository URL and your internet connection."
-    exit 1
+  # First try with SSH
+  log_message "Attempting to clone repository using SSH..."
+  if git clone "$SSH_REPO_URL" "$TEMP_DIR/shh" 2>/dev/null; then
+    log_message "Repository cloned successfully using SSH!"
+    return 0
   fi
   
-  log_message "Repository cloned successfully!"
+  log_message "SSH clone failed, falling back to HTTPS..."
+  # Display SSH recommendation message
+  echo -e "${YELLOW}Notice:${NC} Using HTTPS instead of SSH for cloning."
+  echo -e "For enhanced security and convenience, consider setting up SSH keys for GitHub:"
+  echo -e "  1. Generate SSH keys with: ${BLUE}ssh-keygen -t ed25519 -C \"your_email@example.com\"${NC}"
+  echo -e "  2. Add to GitHub: https://github.com/settings/keys"
+  echo -e "  3. More details: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+  echo ""
+  
+  # If SSH fails, try HTTPS
+  if git clone "$HTTPS_REPO_URL" "$TEMP_DIR/shh"; then
+    log_message "Repository cloned successfully using HTTPS!"
+    return 0
+  else
+    log_message "Error: Failed to clone repository using either SSH or HTTPS."
+    echo "Please check your network connection and repository access."
+    exit 1
+  fi
 }
 
 # Function to install the application

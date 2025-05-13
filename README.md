@@ -17,16 +17,45 @@ Shh is an elegant command-line tool designed for **securely managing SSH keys an
 - AWS CLI installed and configured with appropriate permissions
 - `jq` for JSON processing
 - `ssh-agent` running on your system
+- `git` for cloning the repository
 
-### Basic Installation
-Clone the repository and place the scripts in your system's `PATH`:
+### Quick Installation
+The easiest way to install Shh is using our installation script:
+
 ```bash
-git clone https://github.com/your-username/shh.git
-cd shh
-chmod +x shh shh-add shh-admin
-sudo mv shh /usr/local/bin/
-sudo mv shh-add /usr/local/bin/
-sudo mv shh-admin /usr/local/bin/
+# Install Shh with one command
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/main/shh-install.sh | bash
+```
+
+This will:
+1. Download and install all Shh components
+2. Create symlinks in `/usr/local/bin`
+3. Set proper permissions
+4. Log all installation activities to `/var/log/shh.log`
+
+### Manual Review Before Installation
+If you'd like to review the installer before running it (recommended):
+
+```bash
+# Download installation script
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/main/shh-install.sh -o shh-install.sh
+
+# Make it executable
+chmod +x shh-install.sh
+
+# Run the installer
+./shh-install.sh
+```
+
+### Uninstallation
+To remove Shh from your system:
+
+```bash
+# Uninstall directly
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/main/shh-install.sh | bash -s uninstall
+
+# Or if you have the script locally
+./shh-install.sh uninstall
 ```
 
 ### Environment Configuration
@@ -168,7 +197,7 @@ shh-admin --debug
 ## 🌍 Open Source & Contributions
 We welcome contributions, improvements, and suggestions for enhancements.
 ```bash
-git clone https://github.com/your-username/shh.git
+git clone https://github.com/jenova-marie/shh.git
 ```
 Pull requests and issues are welcome!
 
