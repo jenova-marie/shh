@@ -20,6 +20,7 @@ usage() {
   echo "  -i <key-name>  Specify the SSH key name stored in AWS Secrets Manager"
   echo "                 (default: uses '<username>_ed25519' from user@host)"
   echo "  --debug        Enable verbose debugging output"
+  echo "  --env          Manage environment variables with shh-env"
   echo "  --help         Display this help message"
   echo ""
   echo "Environment variables (in order of precedence):"
@@ -54,19 +55,65 @@ check_aws_credentials() {
   
   # Step 1: Verify basic identity
   debug_log "Verifying AWS identity..."
-  if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
-    echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
-    return 1
+  if $DEBUG_MODE; then
+    # Show the actual AWS command and output for debugging
+    echo "Running: aws sts get-caller-identity --region \"$region\""
+    if ! aws sts get-caller-identity --region "$region"; then
+      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+      return 1
+    fi
+  else
+    # Silent mode for normal operation
+    if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
+      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+      echo "Try running with --debug for more information." >&2
+      return 1
+    fi
   fi
   
   # Step 2: Verify Secrets Manager access for the specific secret
   debug_log "Verifying Secrets Manager permissions for $SECRET_NAME..."
-  if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$region" >/dev/null 2>&1; then
-    echo "Error: Cannot access secret '$SECRET_NAME' in region '$region'. Check permissions or if the secret exists." >&2
-    return 1
+  if $DEBUG_MODE; then
+    # Show the actual AWS command and output for debugging
+    echo "Running: aws secretsmanager describe-secret --secret-id \"$SECRET_NAME\" --region \"$region\""
+    if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$region"; then
+      echo "Error: Cannot access secret '$SECRET_NAME' in region '$region'. Check permissions or if the secret exists." >&2
+      return 1
+    fi
+  else
+    # Silent mode for normal operation
+    if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$region" >/dev/null 2>&1; then
+      echo "Error: Cannot access secret '$SECRET_NAME' in region '$region'. Check permissions or if the secret exists." >&2
+      echo "Try running with --debug for more information." >&2
+      return 1
+    fi
   fi
   
   debug_log "AWS credentials and permissions verified successfully"
+  return 0
+}
+
+# Get the directory of the current script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Function to manage environment
+manage_environment() {
+  echo "Managing SHH environment variables..."
+  
+  # Check if shh-env exists and is executable
+  if [ ! -x "$SCRIPT_DIR/shh-env" ]; then
+    echo "Error: shh-env script not found or not executable."
+    return 1
+  fi
+  
+  # Run shh-env to manage environment
+  "$SCRIPT_DIR/shh-env" "$@"
+  
+  # Re-export values after possible changes
+  export SHH_SECRETS="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
+  export SHH_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+  export AWS_DEFAULT_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+  
   return 0
 }
 
@@ -94,6 +141,12 @@ while [[ $# -gt 0 ]]; do
       DEBUG_MODE=true
       SSH_OPTS+=("-v")
       shift
+      ;;
+    --env)
+      # Pass remaining arguments to environment manager
+      shift
+      manage_environment "$@"
+      exit $?
       ;;
     --help|-h)
       usage
