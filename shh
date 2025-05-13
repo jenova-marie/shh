@@ -6,6 +6,7 @@ set -e
 # Region priority: Command line > SHH_REGION > AWS_REGION > AWS_DEFAULT_REGION > default
 DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
 DEFAULT_SECRET_NAME=${SHH_SECRETS:-"testing-secrets-x"}
+DEBUG_MODE=false
 
 # Function to display usage
 usage() {
@@ -16,12 +17,22 @@ usage() {
   echo "  key-name       Name of the SSH key stored in AWS Secrets Manager"
   echo "  region         AWS region (default: $DEFAULT_REGION)"
   echo ""
+  echo "Options:"
+  echo "  --debug        Enable verbose debugging output"
+  echo ""
   echo "Environment variables (in order of precedence):"
   echo "  SHH_REGION           Preferred AWS region"
   echo "  AWS_REGION           Alternative AWS region"
   echo "  AWS_DEFAULT_REGION   Default AWS region"
   echo "  SHH_SECRETS          AWS Secrets Manager secret name"
   exit 1
+}
+
+# Function for debug logging
+debug_log() {
+  if $DEBUG_MODE; then
+    echo "[DEBUG] $1"
+  fi
 }
 
 # Check dependencies
@@ -44,14 +55,43 @@ check_aws_credentials() {
 }
 
 # Parse arguments
-if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+USER_HOST=""
+KEY_NAME=""
+REGION=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --debug)
+      DEBUG_MODE=true
+      shift
+      ;;
+    --help)
+      usage
+      ;;
+    *)
+      if [ -z "$USER_HOST" ]; then
+        USER_HOST="$1"
+      elif [ -z "$KEY_NAME" ]; then
+        KEY_NAME="$1"
+      elif [ -z "$REGION" ]; then
+        REGION="$1"
+      else
+        echo "Error: Unexpected argument '$1'"
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Validate required arguments
+if [ -z "$USER_HOST" ] || [ -z "$KEY_NAME" ]; then
+  echo "Error: Missing required arguments." >&2
   usage
 fi
 
-# Parameters
-USER_HOST="$1"
-KEY_NAME="$2"
-REGION="${3:-$DEFAULT_REGION}"
+# Set region if not provided
+REGION="${REGION:-$DEFAULT_REGION}"
 SECRET_NAME="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
 
 # Export values for potential use by other scripts
@@ -69,11 +109,15 @@ fi
 
 # Start ssh-agent if not running
 if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
-  echo "Starting ssh-agent..."
-  eval "$(ssh-agent -s)" >/dev/null
+  debug_log "Starting ssh-agent..."
+  if $DEBUG_MODE; then
+    eval "$(ssh-agent -s)"
+  else
+    eval "$(ssh-agent -s)" >/dev/null
+  fi
 fi
 
-echo "Retrieving key '$KEY_NAME' from secret '$SECRET_NAME' in region '$REGION'..."
+debug_log "Retrieving key '$KEY_NAME' from secret '$SECRET_NAME' in region '$REGION'..."
 
 # Retrieve the SSH key from AWS Secrets Manager
 if ! SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
@@ -85,8 +129,10 @@ fi
 SSH_PRIVATE_KEY_B64=$(echo "$SECRET_JSON" | jq -r --arg key "$KEY_NAME" '.[$key] // empty')
 if [ -z "$SSH_PRIVATE_KEY_B64" ]; then
   echo "Error: Key '$KEY_NAME' not found in secret '$SECRET_NAME'!" >&2
-  echo "Available keys:" >&2
-  echo "$SECRET_JSON" | jq -r 'keys[]' | sort >&2
+  if $DEBUG_MODE; then
+    echo "Available keys:" >&2
+    echo "$SECRET_JSON" | jq -r 'keys[]' | sort >&2
+  fi
   exit 1
 fi
 
@@ -100,41 +146,34 @@ SSH_PUBLIC_KEY_FP=$(echo "$SECRET_JSON" | jq -r --arg key "$KEY_NAME.fp" '.[$key
 # Check if the key is already in ssh-agent using fingerprint
 if [ -n "$SSH_PUBLIC_KEY_FP" ]; then
   if ssh-add -l 2>/dev/null | grep -q "$SSH_PUBLIC_KEY_FP"; then
-    echo "Key '$KEY_NAME' is already loaded in ssh-agent, skipping ssh-add."
+    debug_log "Key '$KEY_NAME' is already loaded in ssh-agent, skipping ssh-add."
     IS_KEY_LOADED=true
   else
-    echo "Key '$KEY_NAME' not loaded in ssh-agent, adding it now..."
+    debug_log "Key '$KEY_NAME' not loaded in ssh-agent, adding it now..."
     IS_KEY_LOADED=false
   fi
 else
-  echo "Key fingerprint not found in secret, can't check if key is loaded in ssh-agent."
-  echo "Will attempt to load the key."
+  debug_log "Key fingerprint not found in secret, can't check if key is loaded in ssh-agent."
+  debug_log "Will attempt to load the key."
   IS_KEY_LOADED=false
 fi
 
 # Add key to ssh-agent if not already loaded
 if [ "$IS_KEY_LOADED" = false ]; then
-  # Create a temporary file for the key with restricted permissions
-  SSH_KEY_TEMP=$(mktemp)
-  chmod 600 "$SSH_KEY_TEMP"
-  echo "$SSH_PRIVATE_KEY" > "$SSH_KEY_TEMP"
-  
-  # Add the key to ssh-agent
-  ssh-add "$SSH_KEY_TEMP"
-  
-  # Remove the temporary file
-  rm -f "$SSH_KEY_TEMP"
+  # Add the key to ssh-agent directly from stdin without writing to a file
+  if $DEBUG_MODE; then
+    echo "$SSH_PRIVATE_KEY" | ssh-add -
+  else
+    echo "$SSH_PRIVATE_KEY" | ssh-add - 2>/dev/null
+  fi
 fi
 
 # SSH into the host using the loaded key
-echo "Connecting to $USER_HOST..."
-ssh -v -o StrictHostKeyChecking=accept-new "$USER_HOST"
-
-# No need to remove the key from ssh-agent as it might be used for other connections
-# If needed, uncomment the following:
-# if [ "$IS_KEY_LOADED" = false ] && [ -n "$SSH_PUBLIC_KEY_FP" ]; then
-#   echo "Removing key from ssh-agent..."
-#   ssh-add -d "$SSH_KEY_TEMP"
-# fi
+debug_log "Connecting to $USER_HOST..."
+if $DEBUG_MODE; then
+  ssh -v -o StrictHostKeyChecking=accept-new "$USER_HOST"
+else
+  ssh -o StrictHostKeyChecking=accept-new "$USER_HOST"
+fi
 
 exit 0
