@@ -1,51 +1,173 @@
 #!/bin/bash
+set -e
+
+# Default region
+DEFAULT_REGION=${AWS_DEFAULT_REGION:-"us-east-2"}
+DEFAULT_SECRET_NAME=${SHH_SECRETS:-"ssh-keys"}
+
+# Function to display usage
+usage() {
+  echo "Usage: $(basename "$0") [options]"
+  echo "Options:"
+  echo "  -h, --help           Display this help message"
+  echo "  -r, --region REGION  AWS region (default: $DEFAULT_REGION)"
+  echo "  -s, --secret NAME    Secret name (default: $DEFAULT_SECRET_NAME)"
+  echo "  -l, --list           List keys in the secret"
+  exit 1
+}
+
+# Check dependencies
+check_dependencies() {
+  for cmd in aws jq; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      echo "Error: Required command '$cmd' not found. Please install it." >&2
+      exit 1
+    fi
+  done
+}
 
 # Function to check if a secret exists
 check_secret() {
-  aws secretsmanager describe-secret --secret-id "$1" >/dev/null 2>&1
+  local secret_name="$1"
+  local region="$2"
+  aws secretsmanager describe-secret --secret-id "$secret_name" --region "$region" >/dev/null 2>&1
+  return $?
 }
 
 # Function to create a new secret
 create_secret() {
-  local SECRET_NAME="$1"
-  echo "Creating new AWS Secret: $SECRET_NAME"
-  aws secretsmanager create-secret --name "$SECRET_NAME" --secret-string '{}' >/dev/null 2>&1
-  echo "Secret '$SECRET_NAME' created successfully."
+  local secret_name="$1"
+  local region="$2"
+  echo "Creating new AWS Secret: $secret_name in region $region"
+  if aws secretsmanager create-secret --name "$secret_name" --region "$region" --secret-string '{}' >/dev/null 2>&1; then
+    echo "Secret '$secret_name' created successfully."
+    return 0
+  else
+    echo "Error: Failed to create secret '$secret_name'" >&2
+    return 1
+  fi
+}
+
+# Function to check IAM permissions
+check_iam_permissions() {
+  local secret_name="$1"
+  local region="$2"
+  
+  echo "Checking IAM permissions for AWS Secrets Manager..."
+  
+  # Check read permissions
+  if aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" >/dev/null 2>&1; then
+    echo "✓ You have read permissions for the secret."
+  else
+    echo "✗ You don't have read permissions for the secret."
+  fi
+  
+  # Check write permissions (using list permissions as a proxy)
+  if aws secretsmanager list-secrets --region "$region" >/dev/null 2>&1; then
+    echo "✓ You have list permissions for secrets."
+  else
+    echo "✗ You don't have list permissions for secrets."
+  fi
 }
 
 # Function to list keys inside the secret
 list_keys() {
-  local SECRET_JSON
-  SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$1" --query 'SecretString' --output text || echo '{}')
-  echo "Keys stored in '$1':"
-  echo "$SECRET_JSON" | jq 'keys' || echo "(No keys found)"
+  local secret_name="$1"
+  local region="$2"
+  
+  local secret_json
+  if ! secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" --query 'SecretString' --output text 2>/dev/null); then
+    echo "Error: Unable to retrieve secret '$secret_name'" >&2
+    return 1
+  fi
+  
+  echo "Keys stored in '$secret_name':"
+  if ! echo "$secret_json" | jq -r 'if type=="object" then keys[] else empty end' 2>/dev/null | sort; then
+    echo "(No keys found or invalid JSON)"
+  fi
 }
 
-# Prompt for the secret name
-echo -n "Enter AWS Secret Manager Secret Name (default: $SHH_SECRETS): "
-read SECRET_NAME
-SECRET_NAME=${SECRET_NAME:-$SHH_SECRETS}
+# Parse command line arguments
+REGION="$DEFAULT_REGION"
+SECRET_NAME="$DEFAULT_SECRET_NAME"
+DO_LIST=false
 
-# Export the secret name for subsequent use
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      ;;
+    -r|--region)
+      REGION="$2"
+      shift 2
+      ;;
+    -s|--secret)
+      SECRET_NAME="$2"
+      shift 2
+      ;;
+    -l|--list)
+      DO_LIST=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+  esac
+done
+
+# Check dependencies
+check_dependencies
+
+# If no arguments provided, run in interactive mode
+if [[ -z "$SECRET_NAME" || "$SECRET_NAME" == "$DEFAULT_SECRET_NAME" ]]; then
+  echo -n "Enter AWS Secret Manager Secret Name (default: $DEFAULT_SECRET_NAME): "
+  read -r custom_secret
+  SECRET_NAME=${custom_secret:-$DEFAULT_SECRET_NAME}
+fi
+
+# If region not specified, ask for it
+if [[ -z "$REGION" || "$REGION" == "$DEFAULT_REGION" ]]; then
+  echo -n "Enter AWS region (default: $DEFAULT_REGION): "
+  read -r custom_region
+  REGION=${custom_region:-$DEFAULT_REGION}
+fi
+
+# Export the secret name and region for subsequent use
 export SHH_SECRETS="$SECRET_NAME"
-echo "Using AWS Secret: $SHH_SECRETS"
+export AWS_DEFAULT_REGION="$REGION"
+echo "Using AWS Secret: $SHH_SECRETS in region: $REGION"
 
-if check_secret "$SECRET_NAME"; then
+# Check if secret exists
+if check_secret "$SECRET_NAME" "$REGION"; then
   echo "Secret '$SECRET_NAME' exists."
+  
+  # Check IAM permissions
+  check_iam_permissions "$SECRET_NAME" "$REGION"
 else
   echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
-  read CONFIRM
+  read -r CONFIRM
   if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-    create_secret "$SECRET_NAME"
+    if create_secret "$SECRET_NAME" "$REGION"; then
+      check_iam_permissions "$SECRET_NAME" "$REGION"
+    else
+      exit 1
+    fi
   else
     echo "Secret creation canceled."
-    return 1
+    exit 1
   fi
 fi
 
-# Ask if user wants to list existing keys
-echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
-read LIST_KEYS
-if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
-  list_keys "$SECRET_NAME"
+# List keys if requested or ask if in interactive mode
+if $DO_LIST; then
+  list_keys "$SECRET_NAME" "$REGION"
+else
+  echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
+  read -r LIST_KEYS
+  if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
+    list_keys "$SECRET_NAME" "$REGION"
+  fi
 fi
+
+exit 0
