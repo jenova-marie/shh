@@ -24,13 +24,13 @@ sudo mv shh-add /usr/local/bin/
 ### 🔑 **Securely Add an SSH Key or Secret**
 To add an SSH private key (or any file) to AWS Secrets Manager:
 ```bash
-shh-add ~/.ssh/mykey_ed25519 mykey_ed25519 us-west-2
+shh-add ~/.ssh/mykey_ed25519 mykey_ed25519 us-east-2
 ```
 If no property name is provided, it defaults to the filename.
 
 ### 🔓 **Retrieve & Inject SSH Keys into ssh-agent**
 ```bash
-shh ubuntu@my-server mykey_ed25519 us-west-2
+shh ubuntu@my-server mykey_ed25519 us-east-2
 ```
 This will:
 1. Retrieve `mykey_ed25519` from AWS Secrets Manager.
@@ -97,7 +97,7 @@ This allows `shh` to verify if the key is already loaded in `ssh-agent` without 
 
 ### 🔓 **Retrieve & Inject SSH Keys into ssh-agent**
 ```bash
-shh ubuntu@my-server mykey_ed25519 us-west-2
+shh ubuntu@my-server mykey_ed25519 us-east-2
 ```
 This will:
 1. Retrieve `mykey_ed25519` from AWS Secrets Manager.
