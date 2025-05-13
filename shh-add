@@ -3,27 +3,104 @@
 # Exit on errors
 set -e
 
-# Ensure required arguments are provided
-if [ $# -lt 1 ]; then
-  echo "Usage: $0 <file-path> [property-name] <aws-region> [--only]"
+# Default values
+DEFAULT_REGION=${AWS_DEFAULT_REGION:-"us-east-2"}
+DEFAULT_SECRET_NAME=${SHH_SECRETS:-"ssh-keys"}
+
+# Function to display usage
+usage() {
+  echo "Usage: $(basename "$0") <file-path> [property-name] [region] [options]"
+  echo ""
+  echo "Arguments:"
+  echo "  file-path      Path to the SSH key file"
+  echo "  property-name  Name to store the key as (defaults to filename)"
+  echo "  region         AWS region (defaults to $DEFAULT_REGION)"
+  echo ""
+  echo "Options:"
+  echo "  --pub          Upload the public key (.pub) alongside the private key"
+  echo "  --only         Only upload the specified file, skip public key and fingerprint"
+  echo "  --help         Display this help message"
+  echo ""
+  echo "Environment variables:"
+  echo "  SHH_SECRETS    AWS Secrets Manager secret name (defaults to 'ssh-keys')"
+  echo "  AWS_DEFAULT_REGION  AWS region (defaults to 'us-east-2')"
   exit 1
+}
+
+# Check dependencies
+check_dependencies() {
+  for cmd in aws jq base64 ssh-keygen; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      echo "Error: Required command '$cmd' not found. Please install it." >&2
+      exit 1
+    fi
+  done
+}
+
+# Parse arguments
+if [ $# -lt 1 ]; then
+  usage
 fi
+
+# Check for help flag
+for arg in "$@"; do
+  if [ "$arg" = "--help" ]; then
+    usage
+  fi
+done
 
 # Parameters
 FILE_PATH="$1"
-PROPERTY_NAME="${2:-$(basename "$FILE_PATH")}"  # Default to filename if not provided
-AWS_REGION="${3:-us-east-1}"  # Default to us-east-1 if not provided
-UPLOAD_PUB=true
+shift
+
+# Check for optional arguments
+PROPERTY_NAME=""
+REGION=""
+UPLOAD_PUB=false
 UPLOAD_FP=true
 ONLY_MODE=false
 
-# Check for --only flag
-shift 3 2>/dev/null || true  # Shift past required args if they exist
-for arg in "$@"; do
-  case "$arg" in
-    --only) ONLY_MODE=true; UPLOAD_PUB=false; UPLOAD_FP=false ;;
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pub)
+      UPLOAD_PUB=true
+      shift
+      ;;
+    --only)
+      ONLY_MODE=true
+      UPLOAD_PUB=false
+      UPLOAD_FP=false
+      shift
+      ;;
+    --*)
+      echo "Error: Unknown option '$1'"
+      usage
+      ;;
+    *)
+      if [ -z "$PROPERTY_NAME" ]; then
+        PROPERTY_NAME="$1"
+      elif [ -z "$REGION" ]; then
+        REGION="$1"
+      else
+        echo "Error: Unexpected argument '$1'"
+        usage
+      fi
+      shift
+      ;;
   esac
 done
+
+# Set defaults if not provided
+PROPERTY_NAME="${PROPERTY_NAME:-$(basename "$FILE_PATH")}"
+REGION="${REGION:-$DEFAULT_REGION}"
+SECRET_NAME="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
+
+# Export values for potential use by other scripts
+export SHH_SECRETS="$SECRET_NAME"
+export AWS_DEFAULT_REGION="$REGION"
+
+# Check dependencies
+check_dependencies
 
 # Ensure the file exists
 if [ ! -f "$FILE_PATH" ]; then
@@ -31,26 +108,34 @@ if [ ! -f "$FILE_PATH" ]; then
   exit 1
 fi
 
+echo "Using AWS Secret: $SECRET_NAME in region: $REGION"
+
 # Retrieve the existing secret JSON from AWS Secrets Manager
-EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SHH_SECRETS" --query SecretString --output text 2>/dev/null || echo '{}')
+echo "Retrieving existing secret data..."
+if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
+  echo "Secret '$SECRET_NAME' not found or access denied. Initializing new secret..."
+  EXISTING_SECRET="{}"
+fi
 
 # Base64 encode the file content
-ENCODED_FILE_CONTENT=$(cat "$FILE_PATH" | base64 -w 0)
+echo "Encoding file content..."
+ENCODED_FILE_CONTENT=$(base64 -w 0 < "$FILE_PATH")
 
 # Check if the property already exists in the secret
 if echo "$EXISTING_SECRET" | jq -e --arg key "$PROPERTY_NAME" 'has($key)' >/dev/null; then
-  echo "Property '$PROPERTY_NAME' already exists in secret '$SHH_SECRETS'. Overwriting..."
+  echo "Property '$PROPERTY_NAME' already exists in secret '$SECRET_NAME'. Overwriting..."
 else
-  echo "Adding new property '$PROPERTY_NAME' to secret '$SHH_SECRETS'."
+  echo "Adding new property '$PROPERTY_NAME' to secret '$SECRET_NAME'."
 fi
 
 # Merge new property into existing JSON
 UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg value "$ENCODED_FILE_CONTENT" '. + {($key): $value}')
 
-# If not in --only mode, also upload the .pub file and fingerprint
-if [ "$UPLOAD_PUB" = true ]; then
+# If not in --only mode and --pub is set, also upload the .pub file
+if [ "$UPLOAD_PUB" = true ] && [ "$ONLY_MODE" = false ]; then
   PUB_FILE="$FILE_PATH.pub"
   if [ -f "$PUB_FILE" ]; then
+    echo "Adding public key..."
     ENCODED_PUB_CONTENT=$(cat "$PUB_FILE")
     UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.pub" --arg value "$ENCODED_PUB_CONTENT" '. + {($key): $value}')
     echo "Public key '$PROPERTY_NAME.pub' added to secret."
@@ -59,8 +144,10 @@ if [ "$UPLOAD_PUB" = true ]; then
   fi
 fi
 
-if [ "$UPLOAD_FP" = true ]; then
+# If uploading fingerprint is enabled and not in --only mode
+if [ "$UPLOAD_FP" = true ] && [ "$ONLY_MODE" = false ]; then
   if [ -f "$FILE_PATH.pub" ]; then
+    echo "Calculating and adding SSH key fingerprint..."
     SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
     UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.fp" --arg value "$SSH_KEY_FP" '. + {($key): $value}')
     echo "Fingerprint '$PROPERTY_NAME.fp' added to secret."
@@ -69,7 +156,13 @@ if [ "$UPLOAD_FP" = true ]; then
   fi
 fi
 
-# Store the updated JSON back in AWS Secrets Manager, suppressing output
-aws secretsmanager put-secret-value --secret-id "$SHH_SECRETS" --secret-string "$UPDATED_SECRET" >/dev/null 2>&1
+# Store the updated JSON back in AWS Secrets Manager
+echo "Updating secret in AWS Secrets Manager..."
+if aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string "$UPDATED_SECRET" >/dev/null 2>&1; then
+  echo "Successfully updated secret '$SECRET_NAME' with new property '$PROPERTY_NAME'."
+else
+  echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
+  exit 1
+fi
 
-echo "Successfully updated secret '$SHH_SECRETS' with new property '$PROPERTY_NAME'."
+exit 0
