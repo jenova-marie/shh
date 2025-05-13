@@ -3,9 +3,9 @@
 # Exit on errors
 set -e
 
-# Default values
-DEFAULT_REGION=${AWS_DEFAULT_REGION:-"us-east-2"}
-DEFAULT_SECRET_NAME=${SHH_SECRETS:-"ssh-keys"}
+# Region priority: Command line > SHH_REGION > AWS_REGION > AWS_DEFAULT_REGION > default
+DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
+DEFAULT_SECRET_NAME=${SHH_SECRETS:-"testing-secrets"}
 
 # Function to display usage
 usage() {
@@ -21,9 +21,11 @@ usage() {
   echo "  --only         Only upload the specified file, skip public key and fingerprint"
   echo "  --help         Display this help message"
   echo ""
-  echo "Environment variables:"
-  echo "  SHH_SECRETS    AWS Secrets Manager secret name (defaults to 'ssh-keys')"
-  echo "  AWS_DEFAULT_REGION  AWS region (defaults to 'us-east-2')"
+  echo "Environment variables (in order of precedence):"
+  echo "  SHH_REGION           Preferred AWS region"
+  echo "  AWS_REGION           Alternative AWS region"
+  echo "  AWS_DEFAULT_REGION   Default AWS region"
+  echo "  SHH_SECRETS          AWS Secrets Manager secret name"
   exit 1
 }
 
@@ -35,6 +37,15 @@ check_dependencies() {
       exit 1
     fi
   done
+}
+
+# Function to check AWS credentials
+check_aws_credentials() {
+  if ! aws sts get-caller-identity --region "$1" >/dev/null 2>&1; then
+    echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+    return 1
+  fi
+  return 0
 }
 
 # Parse arguments
@@ -97,10 +108,16 @@ SECRET_NAME="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
 
 # Export values for potential use by other scripts
 export SHH_SECRETS="$SECRET_NAME"
+export SHH_REGION="$REGION"
 export AWS_DEFAULT_REGION="$REGION"
 
 # Check dependencies
 check_dependencies
+
+# Check AWS credentials
+if ! check_aws_credentials "$REGION"; then
+  exit 1
+fi
 
 # Ensure the file exists
 if [ ! -f "$FILE_PATH" ]; then
@@ -114,6 +131,24 @@ echo "Using AWS Secret: $SECRET_NAME in region: $REGION"
 echo "Retrieving existing secret data..."
 if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
   echo "Secret '$SECRET_NAME' not found or access denied. Initializing new secret..."
+  
+  # Check if the secret exists but we don't have permission
+  if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
+    echo "Error: Secret exists but you don't have permission to read it."
+    exit 1
+  fi
+  
+  # Try to create the secret if it doesn't exist
+  echo "Attempting to create secret '$SECRET_NAME'..."
+  if ! aws secretsmanager create-secret --name "$SECRET_NAME" --region "$REGION" --secret-string '{}' >/dev/null 2>&1; then
+    echo "Error: Failed to create secret '$SECRET_NAME'. Check your AWS permissions."
+    echo "Make sure you have the following IAM permissions:"
+    echo "  - secretsmanager:CreateSecret"
+    echo "  - secretsmanager:PutSecretValue"
+    echo "  - secretsmanager:UpdateSecret"
+    exit 1
+  fi
+  
   EXISTING_SECRET="{}"
 fi
 
@@ -158,11 +193,14 @@ fi
 
 # Store the updated JSON back in AWS Secrets Manager
 echo "Updating secret in AWS Secrets Manager..."
-if aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string "$UPDATED_SECRET" >/dev/null 2>&1; then
-  echo "Successfully updated secret '$SECRET_NAME' with new property '$PROPERTY_NAME'."
-else
+# Use verbose output for debugging
+if ! aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string "$UPDATED_SECRET" --debug; then
   echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
+  echo "Make sure you have the following IAM permissions:"
+  echo "  - secretsmanager:PutSecretValue"
+  echo "  - secretsmanager:UpdateSecret"
   exit 1
 fi
 
+echo "Successfully updated secret '$SECRET_NAME' with new property '$PROPERTY_NAME'."
 exit 0
