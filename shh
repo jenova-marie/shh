@@ -139,11 +139,51 @@ fi
 # Decode the base64-encoded private key
 SSH_PRIVATE_KEY=$(echo "$SSH_PRIVATE_KEY_B64" | base64 --decode)
 
-# Try to get fingerprint and public key if they exist
+# Try to get metadata and public key if they exist
 SSH_PUBLIC_KEY=$(echo "$SECRET_JSON" | jq -r --arg key "$KEY_NAME.pub" '.[$key] // empty')
-SSH_PUBLIC_KEY_FP=$(echo "$SECRET_JSON" | jq -r --arg key "$KEY_NAME.fp" '.[$key] // empty')
+META_KEY="${KEY_NAME}.meta"
+
+# Get fingerprint from metadata if it exists
+SSH_PUBLIC_KEY_FP=""
+if echo "$SECRET_JSON" | jq -e --arg key "$META_KEY" 'has($key)' >/dev/null; then
+  # Get the metadata JSON string
+  META_JSON=$(echo "$SECRET_JSON" | jq -r --arg key "$META_KEY" '.[$key]')
+  debug_log "Raw metadata JSON string: $META_JSON"
+  
+  # Extract fingerprint from metadata
+  if echo "$META_JSON" | jq -e 'has("fingerprint")' >/dev/null; then
+    SSH_PUBLIC_KEY_FP=$(echo "$META_JSON" | jq -r '.fingerprint // ""')
+    debug_log "Extracted fingerprint from metadata: $SSH_PUBLIC_KEY_FP"
+  fi
+  
+  # Display key information if in debug mode
+  if $DEBUG_MODE; then
+    KEY_TYPE=$(echo "$META_JSON" | jq -r '.key_type // "unknown"')
+    KEY_SIZE=$(echo "$META_JSON" | jq -r '.key_size // "unknown"')
+    CREATED=$(echo "$META_JSON" | jq -r '.created // "unknown"')
+    VERSION=$(echo "$META_JSON" | jq -r '.version // "1"')
+    ROTATION=$(echo "$META_JSON" | jq -r '.rotation_recommended // "unknown"')
+    
+    echo "Key information:"
+    echo "- Type: $KEY_TYPE"
+    echo "- Size: $KEY_SIZE"
+    echo "- Created: $CREATED"
+    echo "- Version: $VERSION"
+    echo "- Rotation due: $ROTATION"
+  fi
+else
+  debug_log "No metadata found for key '$KEY_NAME'"
+  
+  # Backward compatibility: Check for old-style fingerprint
+  OLD_FP_KEY="${KEY_NAME}.fp"
+  if echo "$SECRET_JSON" | jq -e --arg key "$OLD_FP_KEY" 'has($key)' >/dev/null; then
+    SSH_PUBLIC_KEY_FP=$(echo "$SECRET_JSON" | jq -r --arg key "$OLD_FP_KEY" '.[$key] // empty')
+    debug_log "Found legacy fingerprint: $SSH_PUBLIC_KEY_FP"
+  fi
+fi
 
 # Check if the key is already in ssh-agent using fingerprint
+IS_KEY_LOADED=false
 if [ -n "$SSH_PUBLIC_KEY_FP" ]; then
   if ssh-add -l 2>/dev/null | grep -q "$SSH_PUBLIC_KEY_FP"; then
     debug_log "Key '$KEY_NAME' is already loaded in ssh-agent, skipping ssh-add."
@@ -153,7 +193,7 @@ if [ -n "$SSH_PUBLIC_KEY_FP" ]; then
     IS_KEY_LOADED=false
   fi
 else
-  debug_log "Key fingerprint not found in secret, can't check if key is loaded in ssh-agent."
+  debug_log "Key fingerprint not found in metadata or legacy fields, can't check if key is loaded in ssh-agent."
   debug_log "Will attempt to load the key."
   IS_KEY_LOADED=false
 fi

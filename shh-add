@@ -6,6 +6,8 @@ set -e
 # Region priority: Command line > SHH_REGION > AWS_REGION > AWS_DEFAULT_REGION > default
 DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
 DEFAULT_SECRET_NAME=${SHH_SECRETS:-"testing-secrets"}
+DEBUG_MODE=false
+ADD_TO_AGENT=true  # Default to adding key to SSH agent
 
 # Function to display usage
 usage() {
@@ -19,6 +21,8 @@ usage() {
   echo "Options:"
   echo "  --pub          Upload the public key (.pub) alongside the private key"
   echo "  --only         Only upload the specified file, skip public key and fingerprint"
+  echo "  --debug        Enable verbose debugging output"
+  echo "  --no-ssh-add   Don't add the key to the SSH agent"
   echo "  --help         Display this help message"
   echo ""
   echo "Environment variables (in order of precedence):"
@@ -29,9 +33,23 @@ usage() {
   exit 1
 }
 
+# Function for debug logging
+debug_log() {
+  if $DEBUG_MODE; then
+    echo "[DEBUG] $1"
+  fi
+}
+
 # Check dependencies
 check_dependencies() {
-  for cmd in aws jq base64 ssh-keygen; do
+  local required_commands="aws jq base64 ssh-keygen"
+  
+  # Add ssh-agent commands if we're adding to SSH agent
+  if [ "$ADD_TO_AGENT" = true ]; then
+    required_commands="$required_commands ssh-add ssh-agent grep"
+  fi
+  
+  for cmd in $required_commands; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       echo "Error: Required command '$cmd' not found. Please install it." >&2
       exit 1
@@ -58,6 +76,12 @@ for arg in "$@"; do
   if [ "$arg" = "--help" ]; then
     usage
   fi
+  if [ "$arg" = "--debug" ]; then
+    DEBUG_MODE=true
+  fi
+  if [ "$arg" = "--no-ssh-add" ]; then
+    ADD_TO_AGENT=false
+  fi
 done
 
 # Parameters
@@ -81,6 +105,14 @@ while [ $# -gt 0 ]; do
       ONLY_MODE=true
       UPLOAD_PUB=false
       UPLOAD_FP=false
+      shift
+      ;;
+    --debug)
+      DEBUG_MODE=true
+      shift
+      ;;
+    --no-ssh-add)
+      ADD_TO_AGENT=false
       shift
       ;;
     --*)
@@ -128,11 +160,12 @@ fi
 echo "Using AWS Secret: $SECRET_NAME in region: $REGION"
 
 # Retrieve the existing secret JSON from AWS Secrets Manager
-echo "Retrieving existing secret data..."
+debug_log "Attempting to get existing secret value..."
 if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
   echo "Secret '$SECRET_NAME' not found or access denied. Initializing new secret..."
   
   # Check if the secret exists but we don't have permission
+  debug_log "Checking if secret exists but we lack permissions..."
   if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
     echo "Error: Secret exists but you don't have permission to read it."
     exit 1
@@ -140,7 +173,12 @@ if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_
   
   # Try to create the secret if it doesn't exist
   echo "Attempting to create secret '$SECRET_NAME'..."
-  if ! aws secretsmanager create-secret --name "$SECRET_NAME" --region "$REGION" --secret-string '{}' >/dev/null 2>&1; then
+  local debug_flag=""
+  if $DEBUG_MODE; then
+    debug_flag="--debug"
+  fi
+  
+  if ! aws secretsmanager create-secret --name "$SECRET_NAME" --region "$REGION" --secret-string '{}' $debug_flag; then
     echo "Error: Failed to create secret '$SECRET_NAME'. Check your AWS permissions."
     echo "Make sure you have the following IAM permissions:"
     echo "  - secretsmanager:CreateSecret"
@@ -150,11 +188,13 @@ if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_
   fi
   
   EXISTING_SECRET="{}"
+  debug_log "Initialized new secret with empty JSON object"
 fi
 
 # Base64 encode the file content
-echo "Encoding file content..."
+debug_log "Encoding file content from: $FILE_PATH"
 ENCODED_FILE_CONTENT=$(base64 -w 0 < "$FILE_PATH")
+debug_log "Encoded content length: ${#ENCODED_FILE_CONTENT} characters"
 
 # Check if the property already exists in the secret
 if echo "$EXISTING_SECRET" | jq -e --arg key "$PROPERTY_NAME" 'has($key)' >/dev/null; then
@@ -164,6 +204,7 @@ else
 fi
 
 # Merge new property into existing JSON
+debug_log "Merging property into existing secret JSON..."
 UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg value "$ENCODED_FILE_CONTENT" '. + {($key): $value}')
 
 # If not in --only mode and --pub is set, also upload the .pub file
@@ -171,6 +212,7 @@ if [ "$UPLOAD_PUB" = true ] && [ "$ONLY_MODE" = false ]; then
   PUB_FILE="$FILE_PATH.pub"
   if [ -f "$PUB_FILE" ]; then
     echo "Adding public key..."
+    debug_log "Reading public key from: $PUB_FILE"
     ENCODED_PUB_CONTENT=$(cat "$PUB_FILE")
     UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.pub" --arg value "$ENCODED_PUB_CONTENT" '. + {($key): $value}')
     echo "Public key '$PROPERTY_NAME.pub' added to secret."
@@ -179,28 +221,216 @@ if [ "$UPLOAD_PUB" = true ] && [ "$ONLY_MODE" = false ]; then
   fi
 fi
 
-# If uploading fingerprint is enabled and not in --only mode
+# Add or update metadata for the key
+echo "Adding key metadata..."
+
+# Get current timestamp in ISO 8601 format
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+HOSTNAME=$(hostname)
+USERNAME=$(whoami)
+KEY_TYPE=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | awk '{print $3}' || echo "unknown")
+KEY_SIZE=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | awk '{print $1}' || echo "unknown")
+COMMENT=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | sed 's/^[^ ]* [^ ]* [^ ]* //' || echo "")
+
+# Calculate fingerprint if public key is available
+SSH_KEY_FP=""
 if [ "$UPLOAD_FP" = true ] && [ "$ONLY_MODE" = false ]; then
   if [ -f "$FILE_PATH.pub" ]; then
-    echo "Calculating and adding SSH key fingerprint..."
+    echo "Calculating SSH key fingerprint..."
+    debug_log "Running ssh-keygen to calculate fingerprint"
     SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
-    UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.fp" --arg value "$SSH_KEY_FP" '. + {($key): $value}')
-    echo "Fingerprint '$PROPERTY_NAME.fp' added to secret."
+    debug_log "Fingerprint: $SSH_KEY_FP"
   else
     echo "Warning: No public key file found for fingerprinting."
   fi
 fi
 
-# Store the updated JSON back in AWS Secrets Manager
-echo "Updating secret in AWS Secrets Manager..."
-# Use verbose output for debugging
-if ! aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string "$UPDATED_SECRET" --debug; then
-  echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
-  echo "Make sure you have the following IAM permissions:"
-  echo "  - secretsmanager:PutSecretValue"
-  echo "  - secretsmanager:UpdateSecret"
-  exit 1
+# Check if there's existing metadata to update version
+META_KEY="$PROPERTY_NAME.meta"
+VERSION=1
+CREATED_TIMESTAMP="$TIMESTAMP"
+PREV_ROTATION_TIMESTAMP=""
+
+# If metadata already exists, extract version and created timestamp
+if echo "$EXISTING_SECRET" | jq -e --arg key "$META_KEY" 'has($key)' >/dev/null; then
+  debug_log "Found existing metadata, updating version"
+  EXISTING_META=$(echo "$EXISTING_SECRET" | jq -r --arg key "$META_KEY" '.[$key]')
+  
+  # Try to parse existing metadata as JSON
+  if echo "$EXISTING_META" | jq . >/dev/null 2>&1; then
+    # Extract previous version and increment
+    PREV_VERSION=$(echo "$EXISTING_META" | jq -r '.version // 0')
+    VERSION=$((PREV_VERSION + 1))
+    
+    # Keep original created date
+    CREATED_TIMESTAMP=$(echo "$EXISTING_META" | jq -r '.created // "'$TIMESTAMP'"')
+    
+    # Save previous updated timestamp as rotation timestamp
+    PREV_ROTATION_TIMESTAMP=$(echo "$EXISTING_META" | jq -r '.updated // ""')
+  else
+    debug_log "Existing metadata is not valid JSON, starting with version 1"
+  fi
 fi
 
+# Calculate days until recommended rotation (90 days from now)
+ROTATION_DUE_DATE=$(date -v+90d -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -d "+90 days" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+
+# Build metadata JSON using jq directly instead of here-doc + jq modifications
+META_JSON_BASE=$(jq -n \
+  --arg version "$VERSION" \
+  --arg created "$CREATED_TIMESTAMP" \
+  --arg updated "$TIMESTAMP" \
+  --arg updater "$USERNAME@$HOSTNAME" \
+  --arg key_type "$KEY_TYPE" \
+  --arg key_size "$KEY_SIZE" \
+  --arg comment "$COMMENT" \
+  --arg rotation "$ROTATION_DUE_DATE" \
+  '{
+    "version": ($version | tonumber),
+    "created": $created,
+    "updated": $updated,
+    "updated_by": $updater,
+    "key_type": $key_type,
+    "key_size": $key_size,
+    "comment": $comment,
+    "rotation_recommended": $rotation
+  }')
+
+# Add fingerprint to metadata if available
+if [ -n "$SSH_KEY_FP" ]; then
+  META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --arg fp "$SSH_KEY_FP" '. + {"fingerprint": $fp}')
+fi
+
+# Add rotation history if this is not the first version
+if [ -n "$PREV_ROTATION_TIMESTAMP" ] && [ "$VERSION" -gt 1 ]; then
+  # Add last rotation timestamp
+  META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --arg ts "$PREV_ROTATION_TIMESTAMP" '. + {"last_rotation": $ts}')
+  
+  # Add rotation history tracking
+  if echo "$EXISTING_META" | jq -e 'has("rotation_history")' >/dev/null 2>&1; then
+    ROTATION_HISTORY=$(echo "$EXISTING_META" | jq '.rotation_history')
+    
+    # Add the last update to history
+    ROTATION_ENTRY=$(jq -n --arg ts "$PREV_ROTATION_TIMESTAMP" --arg v "$PREV_VERSION" '{timestamp: $ts, version: ($v | tonumber)}')
+    UPDATED_HISTORY=$(echo "$ROTATION_HISTORY" | jq --argjson entry "$ROTATION_ENTRY" '. + [$entry]' | jq 'sort_by(.timestamp) | reverse | .[0:10]')
+  else
+    # Create new history with just this entry
+    ROTATION_ENTRY=$(jq -n --arg ts "$PREV_ROTATION_TIMESTAMP" --arg v "$PREV_VERSION" '{timestamp: $ts, version: ($v | tonumber)}')
+    UPDATED_HISTORY=$(jq -n --argjson entry "$ROTATION_ENTRY" '[$entry]')
+  fi
+  
+  # Add history to metadata
+  META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --argjson history "$UPDATED_HISTORY" '. + {rotation_history: $history}')
+fi
+
+# Convert metadata JSON to a string to store in the secret
+META_JSON_STRING=$(echo "$META_JSON_BASE" | jq -c .)
+debug_log "Generated metadata: $META_JSON_STRING"
+
+# Add metadata to secret as a STRING value
+UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$META_KEY" --arg value "$META_JSON_STRING" '. + {($key): $value}')
+echo "Metadata for '$PROPERTY_NAME' added to secret (version $VERSION)."
+
+# Check if we need to remove the old fingerprint property
+# This helps with migration from previous versions of the script
+FP_KEY="$PROPERTY_NAME.fp"
+if echo "$UPDATED_SECRET" | jq -e --arg key "$FP_KEY" 'has($key)' >/dev/null; then
+  debug_log "Removing deprecated fingerprint property '$FP_KEY'"
+  UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$FP_KEY" 'del(.[$key])')
+fi
+
+# Store the updated JSON back in AWS Secrets Manager
+echo "Updating secret in AWS Secrets Manager..."
+
+# Create a temporary file for the secret JSON
+TMP_JSON_FILE=$(mktemp)
+echo "$UPDATED_SECRET" > "$TMP_JSON_FILE"
+
+# Prepare debug flag for AWS CLI
+aws_debug_flag=""
+if $DEBUG_MODE; then
+  aws_debug_flag="--debug"
+  # Run with debugging enabled
+  if ! aws secretsmanager put-secret-value \
+       --secret-id "$SECRET_NAME" \
+       --region "$REGION" \
+       --secret-string file://"$TMP_JSON_FILE" \
+       $aws_debug_flag; then
+    rm -f "$TMP_JSON_FILE"
+    echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
+    echo "Make sure you have the following IAM permissions:"
+    echo "  - secretsmanager:PutSecretValue"
+    echo "  - secretsmanager:UpdateSecret"
+    exit 1
+  fi
+else
+  # Run without debug output
+  if ! aws secretsmanager put-secret-value \
+       --secret-id "$SECRET_NAME" \
+       --region "$REGION" \
+       --secret-string file://"$TMP_JSON_FILE" \
+       > /dev/null 2>&1; then
+    rm -f "$TMP_JSON_FILE"
+    echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
+    echo "Make sure you have the following IAM permissions:"
+    echo "  - secretsmanager:PutSecretValue"
+    echo "  - secretsmanager:UpdateSecret"
+    exit 1
+  fi
+fi
+
+# Clean up the temporary file
+rm -f "$TMP_JSON_FILE"
+
 echo "Successfully updated secret '$SECRET_NAME' with new property '$PROPERTY_NAME'."
+
+# Add key to SSH agent if requested
+if [ "$ADD_TO_AGENT" = true ]; then
+  echo "Adding key to SSH agent..."
+  
+  # Start ssh-agent if not running
+  if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
+    debug_log "Starting ssh-agent..."
+    if $DEBUG_MODE; then
+      eval "$(ssh-agent -s)"
+    else
+      eval "$(ssh-agent -s)" >/dev/null
+    fi
+  fi
+  
+  # Check if the key is already in ssh-agent using fingerprint
+  IS_KEY_LOADED=false
+  if [ -n "$SSH_KEY_FP" ]; then
+    if ssh-add -l 2>/dev/null | grep -q "$SSH_KEY_FP"; then
+      debug_log "Key '$PROPERTY_NAME' is already loaded in ssh-agent, skipping ssh-add."
+      echo "Key already loaded in SSH agent."
+      IS_KEY_LOADED=true
+    else
+      debug_log "Key '$PROPERTY_NAME' not loaded in ssh-agent, adding it now..."
+      IS_KEY_LOADED=false
+    fi
+  else
+    debug_log "Key fingerprint not found, can't check if key is loaded in ssh-agent."
+    debug_log "Will attempt to load the key."
+    IS_KEY_LOADED=false
+  fi
+  
+  # Add key to ssh-agent if not already loaded
+  if [ "$IS_KEY_LOADED" = false ]; then
+    if $DEBUG_MODE; then
+      if ssh-add "$FILE_PATH"; then
+        echo "Key added to SSH agent successfully."
+      else
+        echo "Failed to add key to SSH agent. Check if the key is password-protected." >&2
+      fi
+    else
+      if ssh-add "$FILE_PATH" 2>/dev/null; then
+        echo "Key added to SSH agent successfully."
+      else
+        echo "Failed to add key to SSH agent. Check if the key is password-protected." >&2
+      fi
+    fi
+  fi
+fi
+
 exit 0

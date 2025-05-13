@@ -1,0 +1,316 @@
+#!/bin/bash
+
+# shh-install.sh - Installer/Uninstaller script for the Shh toolkit
+# This script installs or uninstalls the Shh tools for secure SSH key management with AWS Secrets Manager
+
+set -e
+
+# Define colors for output
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+RED="\033[0;31m"
+BLUE="\033[0;34m"
+NC="\033[0m" # No Color
+
+# Repository URL - Change this to your actual repo URL before distribution
+REPO_URL="https://github.com/your-username/shh.git"
+INSTALL_DIR="/usr/local/share/shh"
+BIN_DIR="/usr/local/bin"
+LOG_FILE="/var/log/shh.log"
+TEMP_DIR=$(mktemp -d)
+
+# Default action is install
+ACTION="install"
+
+# Print banner
+print_banner() {
+  echo -e "${BLUE}"
+  echo "  ███████╗██╗  ██╗██╗  ██╗"
+  echo "  ██╔════╝██║  ██║██║  ██║"
+  echo "  ███████╗███████║███████║"
+  echo "  ╚════██║██╔══██║██╔══██║"
+  echo "  ███████║██║  ██║██║  ██║"
+  echo "  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝"
+  echo ""
+  echo "  Secretly Managing Your SSH Keys"
+  if [ "$ACTION" = "uninstall" ]; then
+    echo "  [UNINSTALL MODE]"
+  fi
+  echo -e "${NC}"
+}
+
+# Function to log messages
+log_message() {
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  local user=$(whoami)
+  local host=$(hostname)
+  local message="$1"
+  
+  # Create log message
+  local log_entry="[$timestamp] [$user@$host] [$ACTION] $message"
+  
+  # Echo to console if not silent
+  echo "$log_entry"
+  
+  # Append to log file, creating it if it doesn't exist
+  if [ ! -f "$LOG_FILE" ]; then
+    if [ ! -w "$(dirname "$LOG_FILE")" ]; then
+      sudo touch "$LOG_FILE"
+      sudo chmod 644 "$LOG_FILE"
+    else
+      touch "$LOG_FILE"
+      chmod 644 "$LOG_FILE"
+    fi
+  fi
+  
+  # Write to log file
+  if [ -w "$LOG_FILE" ]; then
+    echo "$log_entry" >> "$LOG_FILE"
+  else
+    echo "$log_entry" | sudo tee -a "$LOG_FILE" >/dev/null
+  fi
+}
+
+# Function to check for required commands
+check_dependencies() {
+  log_message "Checking dependencies..."
+  
+  local missing_deps=()
+  for cmd in git aws jq ssh-agent; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing_deps+=("$cmd")
+    fi
+  done
+  
+  if [ ${#missing_deps[@]} -gt 0 ]; then
+    log_message "Error: The following required dependencies are missing:"
+    for dep in "${missing_deps[@]}"; do
+      log_message "  - $dep"
+    done
+    
+    echo ""
+    echo -e "${YELLOW}Please install the missing dependencies and run this script again.${NC}"
+    exit 1
+  fi
+  
+  log_message "All dependencies found!"
+}
+
+# Function to clone the repository
+clone_repo() {
+  log_message "Cloning Shh repository from $REPO_URL..."
+  
+  if ! git clone "$REPO_URL" "$TEMP_DIR/shh"; then
+    log_message "Error: Failed to clone repository."
+    echo "Please check the repository URL and your internet connection."
+    exit 1
+  fi
+  
+  log_message "Repository cloned successfully!"
+}
+
+# Function to install the application
+install_application() {
+  log_message "Installing Shh application to ${INSTALL_DIR}..."
+  
+  # Create installation directory if it doesn't exist
+  if [ ! -d "$INSTALL_DIR" ]; then
+    if [ ! -w "$(dirname "$INSTALL_DIR")" ]; then
+      log_message "Elevated permissions required to create $INSTALL_DIR"
+      if ! sudo mkdir -p "$INSTALL_DIR"; then
+        log_message "Error: Failed to create installation directory."
+        exit 1
+      fi
+      # Change ownership to make it writable
+      sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"
+      log_message "Created installation directory with sudo"
+    else
+      mkdir -p "$INSTALL_DIR"
+      log_message "Created installation directory"
+    fi
+  fi
+  
+  # Copy all files from the repository to the installation directory
+  cp -r "$TEMP_DIR/shh/"* "$INSTALL_DIR/"
+  log_message "Copied application files to $INSTALL_DIR"
+  
+  # Make scripts executable
+  chmod +x "$INSTALL_DIR/shh" "$INSTALL_DIR/shh-add" "$INSTALL_DIR/shh-admin"
+  log_message "Made scripts executable"
+  
+  log_message "Application installed successfully to ${INSTALL_DIR}!"
+}
+
+# Function to create symlinks
+create_symlinks() {
+  log_message "Creating symlinks in ${BIN_DIR}..."
+  
+  # Check if we need sudo for the bin directory
+  local use_sudo=false
+  if [ ! -w "$BIN_DIR" ]; then
+    use_sudo=true
+    log_message "Elevated permissions required to create symlinks in $BIN_DIR"
+  fi
+  
+  # Create symlinks for each executable
+  for cmd in shh shh-add shh-admin; do
+    # Remove existing symlink or file if present
+    if [ -L "$BIN_DIR/$cmd" ] || [ -f "$BIN_DIR/$cmd" ]; then
+      if $use_sudo; then
+        sudo rm -f "$BIN_DIR/$cmd"
+      else
+        rm -f "$BIN_DIR/$cmd"
+      fi
+      log_message "Removed existing $BIN_DIR/$cmd"
+    fi
+    
+    # Create new symlink
+    if $use_sudo; then
+      if ! sudo ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
+        log_message "Error: Failed to create symlink for $cmd."
+        exit 1
+      fi
+    else
+      if ! ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
+        log_message "Error: Failed to create symlink for $cmd."
+        exit 1
+      fi
+    fi
+    log_message "Created symlink for $cmd"
+  done
+  
+  log_message "Symlinks created successfully!"
+}
+
+# Function to clean up temporary files
+cleanup() {
+  log_message "Cleaning up temporary files..."
+  rm -rf "$TEMP_DIR"
+  log_message "Temporary files removed"
+}
+
+# Function to uninstall the application
+uninstall() {
+  log_message "Beginning uninstallation of Shh..."
+  
+  # Remove symlinks
+  log_message "Removing symlinks from $BIN_DIR..."
+  local use_sudo=false
+  if [ ! -w "$BIN_DIR" ]; then
+    use_sudo=true
+    log_message "Elevated permissions required to remove symlinks from $BIN_DIR"
+  fi
+  
+  for cmd in shh shh-add shh-admin; do
+    if [ -L "$BIN_DIR/$cmd" ]; then
+      if $use_sudo; then
+        sudo rm -f "$BIN_DIR/$cmd"
+      else
+        rm -f "$BIN_DIR/$cmd"
+      fi
+      log_message "Removed symlink $BIN_DIR/$cmd"
+    elif [ -f "$BIN_DIR/$cmd" ]; then
+      log_message "Warning: $BIN_DIR/$cmd exists but is not a symlink. Skipping."
+    fi
+  done
+  
+  # Remove installation directory
+  if [ -d "$INSTALL_DIR" ]; then
+    log_message "Removing installation directory $INSTALL_DIR..."
+    
+    if [ ! -w "$(dirname "$INSTALL_DIR")" ] || [ ! -w "$INSTALL_DIR" ]; then
+      if ! sudo rm -rf "$INSTALL_DIR"; then
+        log_message "Error: Failed to remove installation directory."
+        exit 1
+      fi
+    else
+      if ! rm -rf "$INSTALL_DIR"; then
+        log_message "Error: Failed to remove installation directory."
+        exit 1
+      fi
+    fi
+    
+    log_message "Installation directory removed"
+  else
+    log_message "Installation directory $INSTALL_DIR not found."
+  fi
+  
+  log_message "Uninstallation completed successfully!"
+}
+
+# Function to display usage
+show_usage() {
+  echo "Usage: $0 [command]"
+  echo ""
+  echo "Commands:"
+  echo "  install     Install Shh (default if no command specified)"
+  echo "  uninstall   Remove Shh from your system"
+  echo "  help        Show this help message"
+  echo ""
+}
+
+# Main installation process
+install() {
+  check_dependencies
+  clone_repo
+  install_application
+  create_symlinks
+  cleanup
+  
+  echo ""
+  echo -e "${GREEN}Shh has been successfully installed!${NC}"
+  echo ""
+  echo -e "You can now use the following commands:"
+  echo -e "  ${BLUE}shh${NC} - Connect to servers using keys from AWS Secrets Manager"
+  echo -e "  ${BLUE}shh-add${NC} - Add SSH keys to AWS Secrets Manager"
+  echo -e "  ${BLUE}shh-admin${NC} - Manage your SSH keys in AWS Secrets Manager"
+  echo ""
+  echo -e "${YELLOW}Note:${NC} Make sure you have AWS credentials configured via 'aws configure'"
+  echo -e "      or through environment variables before using Shh."
+  echo ""
+  log_message "Installation process completed successfully"
+}
+
+# Parse command line arguments
+if [ $# -gt 0 ]; then
+  case "$1" in
+    install)
+      ACTION="install"
+      ;;
+    uninstall)
+      ACTION="uninstall"
+      ;;
+    help|--help|-h)
+      show_usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown command: $1"
+      show_usage
+      exit 1
+      ;;
+  esac
+fi
+
+# Run the requested action
+print_banner
+
+if [ "$ACTION" = "install" ]; then
+  log_message "Starting installation process..."
+  install
+elif [ "$ACTION" = "uninstall" ]; then
+  log_message "Starting uninstallation process..."
+  echo -e "${YELLOW}Warning: This will remove Shh from your system.${NC}"
+  echo -n "Are you sure you want to continue? [y/N] "
+  read -r CONFIRM
+  if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+    uninstall
+    echo -e "${GREEN}Shh has been successfully uninstalled!${NC}"
+    echo "Log file remains at $LOG_FILE"
+  else
+    log_message "Uninstallation canceled by user"
+    echo -e "${YELLOW}Uninstallation canceled.${NC}"
+  fi
+fi
+
+exit 0

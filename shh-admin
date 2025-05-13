@@ -1,19 +1,35 @@
 #!/bin/bash
 set -e
 
-# Default region
-DEFAULT_REGION=${AWS_DEFAULT_REGION:-"us-east-2"}
-DEFAULT_SECRET_NAME=${SHH_SECRETS:-"ssh-keys"}
+# Region priority: Command line > SHH_REGION > AWS_REGION > AWS_DEFAULT_REGION > default
+DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
+DEFAULT_SECRET_NAME=${SHH_SECRETS:-"testing-secrets"}
+DEBUG_MODE=false
 
 # Function to display usage
 usage() {
   echo "Usage: $(basename "$0") [options]"
   echo "Options:"
-  echo "  -h, --help           Display this help message"
-  echo "  -r, --region REGION  AWS region (default: $DEFAULT_REGION)"
-  echo "  -s, --secret NAME    Secret name (default: $DEFAULT_SECRET_NAME)"
-  echo "  -l, --list           List keys in the secret"
+  echo "  -h, --help                Display this help message"
+  echo "  -r, --region REGION       AWS region (default: $DEFAULT_REGION)"
+  echo "  -s, --secret NAME         Secret name (default: $DEFAULT_SECRET_NAME)"
+  echo "  -l, --list                List keys in the secret"
+  echo "  -d, --detail KEY_NAME     Show details for a specific key"
+  echo "  --debug                   Enable verbose debugging output"
+  echo ""
+  echo "Environment variables (in order of precedence):"
+  echo "  SHH_REGION           Preferred AWS region"
+  echo "  AWS_REGION           Alternative AWS region"
+  echo "  AWS_DEFAULT_REGION   Default AWS region"
+  echo "  SHH_SECRETS          AWS Secrets Manager secret name"
   exit 1
+}
+
+# Function for debug logging
+debug_log() {
+  if $DEBUG_MODE; then
+    echo "[DEBUG] $1"
+  fi
 }
 
 # Check dependencies
@@ -26,10 +42,20 @@ check_dependencies() {
   done
 }
 
+# Function to check AWS credentials
+check_aws_credentials() {
+  if ! aws sts get-caller-identity --region "$1" >/dev/null 2>&1; then
+    echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+    return 1
+  fi
+  return 0
+}
+
 # Function to check if a secret exists
 check_secret() {
   local secret_name="$1"
   local region="$2"
+  debug_log "Checking if secret '$secret_name' exists in region '$region'..."
   aws secretsmanager describe-secret --secret-id "$secret_name" --region "$region" >/dev/null 2>&1
   return $?
 }
@@ -38,12 +64,23 @@ check_secret() {
 create_secret() {
   local secret_name="$1"
   local region="$2"
+  
   echo "Creating new AWS Secret: $secret_name in region $region"
-  if aws secretsmanager create-secret --name "$secret_name" --region "$region" --secret-string '{}' >/dev/null 2>&1; then
+  debug_log "Running 'aws secretsmanager create-secret' command..."
+  
+  # Prepare debug flag for AWS CLI
+  local aws_debug_flag=""
+  if $DEBUG_MODE; then
+    aws_debug_flag="--debug"
+  fi
+  
+  if aws secretsmanager create-secret --name "$secret_name" --region "$region" --secret-string '{}' $aws_debug_flag >/dev/null 2>&1; then
     echo "Secret '$secret_name' created successfully."
     return 0
   else
     echo "Error: Failed to create secret '$secret_name'" >&2
+    echo "Make sure you have the following IAM permissions:"
+    echo "  - secretsmanager:CreateSecret"
     return 1
   fi
 }
@@ -56,6 +93,7 @@ check_iam_permissions() {
   echo "Checking IAM permissions for AWS Secrets Manager..."
   
   # Check read permissions
+  debug_log "Testing read permissions..."
   if aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" >/dev/null 2>&1; then
     echo "✓ You have read permissions for the secret."
   else
@@ -63,10 +101,23 @@ check_iam_permissions() {
   fi
   
   # Check write permissions (using list permissions as a proxy)
+  debug_log "Testing list permissions..."
   if aws secretsmanager list-secrets --region "$region" >/dev/null 2>&1; then
     echo "✓ You have list permissions for secrets."
   else
     echo "✗ You don't have list permissions for secrets."
+  fi
+  
+  # Check update permissions (only if the user has read permissions)
+  if aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" >/dev/null 2>&1; then
+    debug_log "Testing update permissions..."
+    if aws secretsmanager update-secret --secret-id "$secret_name" --region "$region" --description "Permissions Test" >/dev/null 2>&1; then
+      echo "✓ You have update permissions for the secret."
+      # Reset description to empty
+      aws secretsmanager update-secret --secret-id "$secret_name" --region "$region" --description "" >/dev/null 2>&1
+    else
+      echo "✗ You don't have update permissions for the secret."
+    fi
   fi
 }
 
@@ -75,6 +126,7 @@ list_keys() {
   local secret_name="$1"
   local region="$2"
   
+  debug_log "Retrieving secret value from AWS Secrets Manager..."
   local secret_json
   if ! secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" --query 'SecretString' --output text 2>/dev/null); then
     echo "Error: Unable to retrieve secret '$secret_name'" >&2
@@ -82,8 +134,125 @@ list_keys() {
   fi
   
   echo "Keys stored in '$secret_name':"
-  if ! echo "$secret_json" | jq -r 'if type=="object" then keys[] else empty end' 2>/dev/null | sort; then
-    echo "(No keys found or invalid JSON)"
+  echo "----------------------------"
+  
+  # Get all keys that don't end with .pub or .meta
+  local keys
+  keys=$(echo "$secret_json" | jq -r 'keys[] | select(endswith(".pub") | not) | select(endswith(".meta") | not)' 2>/dev/null | sort)
+  
+  if [ -z "$keys" ]; then
+    echo "(No SSH keys found)"
+    return 0
+  fi
+  
+  # Print table header
+  printf "%-30s %-12s %-12s %-20s %s\n" "Key Name" "Type" "Size" "Created" "Rotation Due"
+  printf "%-30s %-12s %-12s %-20s %s\n" "--------" "----" "----" "-------" "------------"
+  
+  # Process each key
+  echo "$keys" | while read -r key; do
+    local meta_key="${key}.meta"
+    local meta_data=""
+    local key_type="unknown"
+    local key_size="unknown"
+    local created_date="unknown"
+    local rotation_date="unknown"
+    
+    # Check if metadata exists for this key
+    if echo "$secret_json" | jq -e --arg key "$meta_key" 'has($key)' >/dev/null; then
+      # Get metadata string and parse it as JSON - this is the key change
+      local meta_json=$(echo "$secret_json" | jq -r --arg key "$meta_key" '.[$key]')
+      debug_log "Raw metadata: $meta_json"
+      
+      # Parse the JSON string to extract metadata
+      key_type=$(echo "$meta_json" | jq -r '.key_type // "unknown"')
+      key_size=$(echo "$meta_json" | jq -r '.key_size // "unknown"')
+      created_date=$(echo "$meta_json" | jq -r '.created // "unknown"' | cut -d'T' -f1)
+      rotation_date=$(echo "$meta_json" | jq -r '.rotation_recommended // "unknown"' | cut -d'T' -f1)
+    fi
+    
+    printf "%-30s %-12s %-12s %-20s %s\n" "$key" "$key_type" "$key_size" "$created_date" "$rotation_date"
+  done
+}
+
+# Function to show key details
+show_key_details() {
+  local secret_name="$1"
+  local region="$2"
+  local key_name="$3"
+  
+  debug_log "Retrieving secret value for key '$key_name'..."
+  local secret_json
+  if ! secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" --query 'SecretString' --output text 2>/dev/null); then
+    echo "Error: Unable to retrieve secret '$secret_name'" >&2
+    return 1
+  fi
+  
+  # Check if the key exists
+  if ! echo "$secret_json" | jq -e --arg key "$key_name" 'has($key)' >/dev/null; then
+    echo "Error: Key '$key_name' not found in secret '$secret_name'" >&2
+    return 1
+  fi
+  
+  echo "Details for key: $key_name"
+  echo "------------------------"
+  
+  # Check for metadata
+  local meta_key="${key_name}.meta"
+  if echo "$secret_json" | jq -e --arg key "$meta_key" 'has($key)' >/dev/null; then
+    # Get the JSON string metadata and parse it
+    local meta_json=$(echo "$secret_json" | jq -r --arg key "$meta_key" '.[$key]')
+    debug_log "Raw metadata JSON string: $meta_json"
+    
+    # Print basic info from parsed JSON
+    echo "Key type:            $(echo "$meta_json" | jq -r '.key_type // "unknown"')"
+    echo "Key size:            $(echo "$meta_json" | jq -r '.key_size // "unknown"')"
+    echo "Comment:             $(echo "$meta_json" | jq -r '.comment // "none"')"
+    echo "Fingerprint:         $(echo "$meta_json" | jq -r '.fingerprint // "unknown"')"
+    echo "Created:             $(echo "$meta_json" | jq -r '.created // "unknown"')"
+    echo "Last updated:        $(echo "$meta_json" | jq -r '.updated // "unknown"')"
+    echo "Updated by:          $(echo "$meta_json" | jq -r '.updated_by // "unknown"')"
+    echo "Current version:     $(echo "$meta_json" | jq -r '.version // "1"')"
+    echo "Rotation due:        $(echo "$meta_json" | jq -r '.rotation_recommended // "unknown"')"
+    
+    # Check if public key exists
+    local pub_key="${key_name}.pub"
+    if echo "$secret_json" | jq -e --arg key "$pub_key" 'has($key)' >/dev/null; then
+      echo "Public key:          Available"
+      echo ""
+      echo "Public key content:"
+      echo "-------------------"
+      echo "$secret_json" | jq -r --arg key "$pub_key" '.[$key]'
+    else
+      echo "Public key:          Not available"
+    fi
+    
+    # Show rotation history if available
+    if echo "$meta_json" | jq -e 'has("rotation_history")' >/dev/null; then
+      echo ""
+      echo "Rotation History:"
+      echo "----------------"
+      printf "%-25s %s\n" "Date" "Version"
+      printf "%-25s %s\n" "----" "-------"
+      
+      echo "$meta_json" | jq -r '.rotation_history[] | "\(.timestamp) \(.version)"' | while read -r date version; do
+        printf "%-25s %s\n" "$date" "$version"
+      done
+    fi
+  else
+    echo "No metadata available for this key."
+    
+    # Check if public key exists
+    local pub_key="${key_name}.pub"
+    if echo "$secret_json" | jq -e --arg key "$pub_key" 'has($key)' >/dev/null; then
+      echo "Public key:          Available"
+      echo ""
+      echo "Public key content:"
+      echo "-------------------"
+      echo "$secret_json" | jq -r --arg key "$pub_key" '.[$key]'
+    else
+      echo "Public key:          Not available"
+    fi
   fi
 }
 
@@ -91,6 +260,7 @@ list_keys() {
 REGION="$DEFAULT_REGION"
 SECRET_NAME="$DEFAULT_SECRET_NAME"
 DO_LIST=false
+DETAIL_KEY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -109,6 +279,14 @@ while [[ $# -gt 0 ]]; do
       DO_LIST=true
       shift
       ;;
+    -d|--detail)
+      DETAIL_KEY="$2"
+      shift 2
+      ;;
+    --debug)
+      DEBUG_MODE=true
+      shift
+      ;;
     *)
       echo "Unknown option: $1" >&2
       usage
@@ -119,15 +297,20 @@ done
 # Check dependencies
 check_dependencies
 
+# Check AWS credentials
+if ! check_aws_credentials "$REGION"; then
+  exit 1
+fi
+
 # If no arguments provided, run in interactive mode
-if [[ -z "$SECRET_NAME" || "$SECRET_NAME" == "$DEFAULT_SECRET_NAME" ]]; then
+if [[ -z "$SECRET_NAME" || "$SECRET_NAME" == "$DEFAULT_SECRET_NAME" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false ]]; then
   echo -n "Enter AWS Secret Manager Secret Name (default: $DEFAULT_SECRET_NAME): "
   read -r custom_secret
   SECRET_NAME=${custom_secret:-$DEFAULT_SECRET_NAME}
 fi
 
 # If region not specified, ask for it
-if [[ -z "$REGION" || "$REGION" == "$DEFAULT_REGION" ]]; then
+if [[ -z "$REGION" || "$REGION" == "$DEFAULT_REGION" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false ]]; then
   echo -n "Enter AWS region (default: $DEFAULT_REGION): "
   read -r custom_region
   REGION=${custom_region:-$DEFAULT_REGION}
@@ -135,6 +318,7 @@ fi
 
 # Export the secret name and region for subsequent use
 export SHH_SECRETS="$SECRET_NAME"
+export SHH_REGION="$REGION"
 export AWS_DEFAULT_REGION="$REGION"
 echo "Using AWS Secret: $SHH_SECRETS in region: $REGION"
 
@@ -157,6 +341,12 @@ else
     echo "Secret creation canceled."
     exit 1
   fi
+fi
+
+# Show key details if requested
+if [[ -n "$DETAIL_KEY" ]]; then
+  show_key_details "$SECRET_NAME" "$REGION" "$DETAIL_KEY"
+  exit 0
 fi
 
 # List keys if requested or ask if in interactive mode
