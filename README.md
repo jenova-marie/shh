@@ -25,7 +25,7 @@ The easiest way to install Shh is using our installation script:
 
 ```bash
 # Install Shh with one command
-curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-insstall | bash
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash
 ```
 
 This will:
@@ -39,13 +39,13 @@ If you'd like to review the installer before running it (recommended):
 
 ```bash
 # Download installation script
-curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-insstall -o shh-insstall
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install -o shh-install
 
 # Make it executable
-chmod +x shh-insstall
+chmod +x shh-install
 
 # Run the installer
-./shh-insstall
+./shh-install
 ```
 
 ### Uninstallation
@@ -53,10 +53,10 @@ To remove Shh from your system:
 
 ```bash
 # Uninstall directly
-curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-insstall | bash -s uninstall
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s uninstall
 
 # Or if you have the script locally
-./shh-insstall uninstall
+./shh-install uninstall
 ```
 
 ### Environment Configuration
@@ -265,7 +265,7 @@ shh-env --debug
 ## 🌍 Open Source & Contributions
 We welcome contributions, improvements, and suggestions for enhancements.
 ```bash
-git clone https://github.com/jenova-marie/shh.git
+git clone git@github.com:jenova-marie/shh.git
 ```
 Pull requests and issues are welcome!
 

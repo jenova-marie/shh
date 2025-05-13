@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# shh-insstall - Installer/Uninstaller script for the Shh toolkit
+# shh-install - Installer/Uninstaller script for the Shh toolkit
 # This script installs or uninstalls the Shh tools for secure SSH key management with AWS Secrets Manager
 
 set -e
