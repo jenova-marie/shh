@@ -20,6 +20,9 @@ BIN_DIR="/usr/local/bin"
 LOG_FILE="/var/log/shh.log"
 TEMP_DIR=$(mktemp -d)
 
+# List of all executable scripts
+SHH_EXECUTABLES=("shh" "shh-add" "shh-admin" "shh-env")
+
 # Default action is install
 ACTION="install"
 
@@ -152,8 +155,14 @@ install_application() {
   log_message "Copied application files to $INSTALL_DIR"
   
   # Make scripts executable
-  chmod +x "$INSTALL_DIR/shh" "$INSTALL_DIR/shh-add" "$INSTALL_DIR/shh-admin"
-  log_message "Made scripts executable"
+  for script in "${SHH_EXECUTABLES[@]}"; do
+    if [ -f "$INSTALL_DIR/$script" ]; then
+      chmod +x "$INSTALL_DIR/$script"
+      log_message "Made $script executable"
+    else
+      log_message "Warning: $script not found in installation files"
+    fi
+  done
   
   log_message "Application installed successfully to ${INSTALL_DIR}!"
 }
@@ -170,30 +179,34 @@ create_symlinks() {
   fi
   
   # Create symlinks for each executable
-  for cmd in shh shh-add shh-admin; do
-    # Remove existing symlink or file if present
-    if [ -L "$BIN_DIR/$cmd" ] || [ -f "$BIN_DIR/$cmd" ]; then
+  for cmd in "${SHH_EXECUTABLES[@]}"; do
+    if [ -f "$INSTALL_DIR/$cmd" ]; then
+      # Remove existing symlink or file if present
+      if [ -L "$BIN_DIR/$cmd" ] || [ -f "$BIN_DIR/$cmd" ]; then
+        if $use_sudo; then
+          sudo rm -f "$BIN_DIR/$cmd"
+        else
+          rm -f "$BIN_DIR/$cmd"
+        fi
+        log_message "Removed existing $BIN_DIR/$cmd"
+      fi
+      
+      # Create new symlink
       if $use_sudo; then
-        sudo rm -f "$BIN_DIR/$cmd"
+        if ! sudo ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
+          log_message "Error: Failed to create symlink for $cmd."
+          exit 1
+        fi
       else
-        rm -f "$BIN_DIR/$cmd"
+        if ! ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
+          log_message "Error: Failed to create symlink for $cmd."
+          exit 1
+        fi
       fi
-      log_message "Removed existing $BIN_DIR/$cmd"
-    fi
-    
-    # Create new symlink
-    if $use_sudo; then
-      if ! sudo ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
-        log_message "Error: Failed to create symlink for $cmd."
-        exit 1
-      fi
+      log_message "Created symlink for $cmd"
     else
-      if ! ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
-        log_message "Error: Failed to create symlink for $cmd."
-        exit 1
-      fi
+      log_message "Warning: Cannot create symlink for $cmd, source file not found"
     fi
-    log_message "Created symlink for $cmd"
   done
   
   log_message "Symlinks created successfully!"
@@ -206,9 +219,51 @@ cleanup() {
   log_message "Temporary files removed"
 }
 
+# Function to detect all installed shh executables
+detect_installed_executables() {
+  log_message "Detecting installed Shh executables..."
+  local installed_execs=()
+  
+  # Check for expected executables by pattern in BIN_DIR
+  for file in "$BIN_DIR"/shh*; do
+    if [ -L "$file" ] || [ -f "$file" ]; then
+      basename=$(basename "$file")
+      installed_execs+=("$basename")
+      log_message "Found installed executable: $basename"
+    fi
+  done
+  
+  # Also check installation directory
+  if [ -d "$INSTALL_DIR" ]; then
+    for file in "$INSTALL_DIR"/shh*; do
+      if [ -x "$file" ] && [ -f "$file" ]; then
+        basename=$(basename "$file")
+        # Only add if not already in the list
+        if ! [[ " ${installed_execs[*]} " =~ " ${basename} " ]]; then
+          installed_execs+=("$basename")
+          log_message "Found additional executable in install dir: $basename"
+        fi
+      fi
+    done
+  fi
+  
+  # Add default executables if none found (fallback)
+  if [ ${#installed_execs[@]} -eq 0 ]; then
+    log_message "No executables found, using default list"
+    installed_execs=("${SHH_EXECUTABLES[@]}")
+  fi
+  
+  # Return the list
+  echo "${installed_execs[@]}"
+}
+
 # Function to uninstall the application
 uninstall() {
   log_message "Beginning uninstallation of Shh..."
+  
+  # Detect all installed executables
+  local detected_execs=()
+  IFS=' ' read -r -a detected_execs <<< "$(detect_installed_executables)"
   
   # Remove symlinks
   log_message "Removing symlinks from $BIN_DIR..."
@@ -218,7 +273,7 @@ uninstall() {
     log_message "Elevated permissions required to remove symlinks from $BIN_DIR"
   fi
   
-  for cmd in shh shh-add shh-admin; do
+  for cmd in "${detected_execs[@]}"; do
     if [ -L "$BIN_DIR/$cmd" ]; then
       if $use_sudo; then
         sudo rm -f "$BIN_DIR/$cmd"
@@ -252,6 +307,27 @@ uninstall() {
     log_message "Installation directory $INSTALL_DIR not found."
   fi
   
+  # Clean up shell config files
+  log_message "Checking for Shh environment variables in shell config files..."
+  for config_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.profile"; do
+    if [ -f "$config_file" ] && grep -q "SHH_" "$config_file"; then
+      echo -e "${YELLOW}Found Shh environment variables in $config_file.${NC}"
+      echo -n "Would you like to remove them? [y/N] "
+      read -r CONFIRM_ENV
+      if [[ "$CONFIRM_ENV" =~ ^[Yy]$ ]]; then
+        # Create backup
+        cp "$config_file" "$config_file.shh-backup.$(date +%Y%m%d%H%M%S)"
+        log_message "Created backup of $config_file"
+        
+        # Remove SHH_ environment variables
+        sed -i.bak '/^export SHH_/d' "$config_file"
+        sed -i.bak '/^# SHH environment variables/d' "$config_file"
+        rm -f "$config_file.bak"
+        log_message "Removed Shh environment variables from $config_file"
+      fi
+    fi
+  done
+  
   log_message "Uninstallation completed successfully!"
 }
 
@@ -278,9 +354,14 @@ install() {
   echo -e "${GREEN}Shh has been successfully installed!${NC}"
   echo ""
   echo -e "You can now use the following commands:"
-  echo -e "  ${BLUE}shh${NC} - Connect to servers using keys from AWS Secrets Manager"
-  echo -e "  ${BLUE}shh-add${NC} - Add SSH keys to AWS Secrets Manager"
-  echo -e "  ${BLUE}shh-admin${NC} - Manage your SSH keys in AWS Secrets Manager"
+  for cmd in "${SHH_EXECUTABLES[@]}"; do
+    echo -e "  ${BLUE}$cmd${NC}"
+  done
+  echo ""
+  echo -e "${BLUE}shh${NC} - Connect to servers using keys from AWS Secrets Manager"
+  echo -e "${BLUE}shh-add${NC} - Add SSH keys to AWS Secrets Manager"
+  echo -e "${BLUE}shh-admin${NC} - Manage your SSH keys in AWS Secrets Manager"
+  echo -e "${BLUE}shh-env${NC} - Manage environment variables for Shh"
   echo ""
   echo -e "${YELLOW}Note:${NC} Make sure you have AWS credentials configured via 'aws configure'"
   echo -e "      or through environment variables before using Shh."
