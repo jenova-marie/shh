@@ -505,18 +505,18 @@ else
     else
       exit 1
     fi
-  else
+else
     # Interactive mode
-    echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
+  echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
     read -r CONFIRM
-    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+  if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
       if create_secret "$SECRET_NAME" "$REGION"; then
         check_iam_permissions "$SECRET_NAME" "$REGION"
       else
         exit 1
       fi
-    else
-      echo "Secret creation canceled."
+  else
+    echo "Secret creation canceled."
       exit 1
     fi
   fi
@@ -532,9 +532,9 @@ fi
 if $DO_LIST; then
   list_keys "$SECRET_NAME" "$REGION"
 else
-  echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
+echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
   read -r LIST_KEYS
-  if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
+if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
     list_keys "$SECRET_NAME" "$REGION"
   fi
 fi
