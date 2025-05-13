@@ -3,10 +3,8 @@
 # Exit on errors
 set -e
 
-# Region priority: Command line > SHH_REGION > AWS_REGION > AWS_DEFAULT_REGION > default
-DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
-DEFAULT_SECRET_NAME=${SHH_SECRETS:-"testing-secrets-x"}
-DEBUG_MODE=false
+# Get the directory of the current script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Function to display usage
 usage() {
@@ -14,7 +12,7 @@ usage() {
   echo ""
   echo "Arguments:"
   echo "  user@host      Remote SSH destination"
-  echo "  region         AWS region (default: $DEFAULT_REGION)"
+  echo "  region         AWS region (uses SHH_REGION or AWS_REGION environment variable if not specified)"
   echo ""
   echo "Options:"
   echo "  -i <key-name>  Specify the SSH key name stored in AWS Secrets Manager"
@@ -23,17 +21,15 @@ usage() {
   echo "  --env          Manage environment variables with shh-env"
   echo "  --help         Display this help message"
   echo ""
-  echo "Environment variables (in order of precedence):"
-  echo "  SHH_REGION           Preferred AWS region"
-  echo "  AWS_REGION           Alternative AWS region"
-  echo "  AWS_DEFAULT_REGION   Default AWS region"
-  echo "  SHH_SECRETS          AWS Secrets Manager secret name"
+  echo "Environment Setup:"
+  echo "  Run 'shh-env' to configure your environment variables"
+  echo "  Run 'shh-admin' to manage your AWS Secrets Manager secrets"
   exit 1
 }
 
 # Function for debug logging
 debug_log() {
-  if $DEBUG_MODE; then
+  if [ "$DEBUG_MODE" = true ]; then
     echo "[DEBUG] $1"
   fi
 }
@@ -48,54 +44,6 @@ check_dependencies() {
   done
 }
 
-# Function to check AWS credentials
-check_aws_credentials() {
-  local region="$1"
-  debug_log "Checking AWS credentials in region: $region"
-  
-  # Step 1: Verify basic identity
-  debug_log "Verifying AWS identity..."
-  if $DEBUG_MODE; then
-    # Show the actual AWS command and output for debugging
-    echo "Running: aws sts get-caller-identity --region \"$region\""
-    if ! aws sts get-caller-identity --region "$region"; then
-      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
-      return 1
-    fi
-  else
-    # Silent mode for normal operation
-    if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
-      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
-      echo "Try running with --debug for more information." >&2
-      return 1
-    fi
-  fi
-  
-  # Step 2: Verify Secrets Manager access for the specific secret
-  debug_log "Verifying Secrets Manager permissions for $SECRET_NAME..."
-  if $DEBUG_MODE; then
-    # Show the actual AWS command and output for debugging
-    echo "Running: aws secretsmanager describe-secret --secret-id \"$SECRET_NAME\" --region \"$region\""
-    if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$region"; then
-      echo "Error: Cannot access secret '$SECRET_NAME' in region '$region'. Check permissions or if the secret exists." >&2
-      return 1
-    fi
-  else
-    # Silent mode for normal operation
-    if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$region" >/dev/null 2>&1; then
-      echo "Error: Cannot access secret '$SECRET_NAME' in region '$region'. Check permissions or if the secret exists." >&2
-      echo "Try running with --debug for more information." >&2
-      return 1
-    fi
-  fi
-  
-  debug_log "AWS credentials and permissions verified successfully"
-  return 0
-}
-
-# Get the directory of the current script
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
 # Function to manage environment
 manage_environment() {
   echo "Managing SHH environment variables..."
@@ -106,18 +54,13 @@ manage_environment() {
     return 1
   fi
   
-  # Run shh-env to manage environment
-  "$SCRIPT_DIR/shh-env" "$@"
-  
-  # Re-export values after possible changes
-  export SHH_SECRETS="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
-  export SHH_REGION="${SHH_REGION:-$DEFAULT_REGION}"
-  export AWS_DEFAULT_REGION="${SHH_REGION:-$DEFAULT_REGION}"
-  
-  return 0
+  # Run shh-env with interactive menu
+  "$SCRIPT_DIR/shh-env" --menu "$@"
+  exit 0
 }
 
 # Parse arguments
+DEBUG_MODE=false
 KEY_NAME=""
 USER_HOST=""
 REGION=""
@@ -146,7 +89,6 @@ while [[ $# -gt 0 ]]; do
       # Pass remaining arguments to environment manager
       shift
       manage_environment "$@"
-      exit $?
       ;;
     --help|-h)
       usage
@@ -177,6 +119,28 @@ if [ -z "$USER_HOST" ]; then
   usage
 fi
 
+# Check for required environment variables
+if [ -z "${SHH_SECRETS}" ]; then
+  echo "Error: SHH_SECRETS environment variable not set." >&2
+  echo "Please run 'shh-env' to configure your environment." >&2
+  exit 1
+fi
+
+# Set region from environment or command line
+if [ -z "$REGION" ]; then
+  if [ -n "${SHH_REGION}" ]; then
+    REGION="${SHH_REGION}"
+  elif [ -n "${AWS_REGION}" ]; then
+    REGION="${AWS_REGION}"
+  elif [ -n "${AWS_DEFAULT_REGION}" ]; then
+    REGION="${AWS_DEFAULT_REGION}"
+  else
+    echo "Error: AWS region not specified and no region environment variable set." >&2
+    echo "Please specify a region or run 'shh-env' to configure your environment." >&2
+    exit 1
+  fi
+fi
+
 # If KEY_NAME is not specified, derive it from username
 if [ -z "$KEY_NAME" ]; then
   # Extract username from user@host
@@ -185,49 +149,41 @@ if [ -z "$KEY_NAME" ]; then
   debug_log "No key specified, defaulting to '$KEY_NAME'"
 fi
 
-# Set region if not provided
-REGION="${REGION:-$DEFAULT_REGION}"
-SECRET_NAME="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
-
-# Export values for potential use by other scripts
-export SHH_SECRETS="$SECRET_NAME"
-export SHH_REGION="$REGION"
+# Export region for AWS CLI
 export AWS_DEFAULT_REGION="$REGION"
 
 # Check dependencies
 check_dependencies
 
-# Check AWS credentials
-if ! check_aws_credentials "$REGION"; then
-  exit 1
-fi
-
 # Start ssh-agent if not running
 if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
   debug_log "Starting ssh-agent..."
-  if $DEBUG_MODE; then
+  if [ "$DEBUG_MODE" = true ]; then
     eval "$(ssh-agent -s)"
   else
     eval "$(ssh-agent -s)" >/dev/null
   fi
 fi
 
-debug_log "Retrieving key '$KEY_NAME' from secret '$SECRET_NAME' in region '$REGION'..."
+debug_log "Retrieving key '$KEY_NAME' from secret '${SHH_SECRETS}' in region '$REGION'..."
 
 # Retrieve the SSH key from AWS Secrets Manager
-if ! SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
-  echo "Error: Failed to retrieve secret '$SECRET_NAME' from AWS Secrets Manager in region '$REGION'!" >&2
+SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "${SHH_SECRETS}" --region "$REGION" --query SecretString --output text 2>/dev/null) || {
+  echo "Error: Failed to retrieve secret '${SHH_SECRETS}' from AWS Secrets Manager in region '$REGION'!" >&2
+  echo "Please check your AWS credentials and secret configuration." >&2
+  echo "Run 'shh-admin' to manage your AWS secrets." >&2
   exit 1
-fi
+}
 
 # Extract private key using jq (base64 encoded)
 SSH_PRIVATE_KEY_B64=$(echo "$SECRET_JSON" | jq -r --arg key "$KEY_NAME" '.[$key] // empty')
 if [ -z "$SSH_PRIVATE_KEY_B64" ]; then
-  echo "Error: Key '$KEY_NAME' not found in secret '$SECRET_NAME'!" >&2
-  if $DEBUG_MODE; then
+  echo "Error: Key '$KEY_NAME' not found in secret '${SHH_SECRETS}'!" >&2
+  if [ "$DEBUG_MODE" = true ]; then
     echo "Available keys:" >&2
-    echo "$SECRET_JSON" | jq -r 'keys[]' | sort >&2
+    echo "$SECRET_JSON" | jq -r 'keys[]' | grep -v "\.pub$" | grep -v "\.meta$" | grep -v "\.fp$" | sort >&2
   fi
+  echo "Use 'shh-admin --list' to see available keys." >&2
   exit 1
 fi
 
@@ -252,7 +208,7 @@ if echo "$SECRET_JSON" | jq -e --arg key "$META_KEY" 'has($key)' >/dev/null; the
   fi
   
   # Display key information if in debug mode
-  if $DEBUG_MODE; then
+  if [ "$DEBUG_MODE" = true ]; then
     KEY_TYPE=$(echo "$META_JSON" | jq -r '.key_type // "unknown"')
     KEY_SIZE=$(echo "$META_JSON" | jq -r '.key_size // "unknown"')
     CREATED=$(echo "$META_JSON" | jq -r '.created // "unknown"')
@@ -296,7 +252,7 @@ fi
 # Add key to ssh-agent if not already loaded
 if [ "$IS_KEY_LOADED" = false ]; then
   # Add the key to ssh-agent directly from stdin without writing to a file
-  if $DEBUG_MODE; then
+  if [ "$DEBUG_MODE" = true ]; then
     echo "$SSH_PRIVATE_KEY" | ssh-add -
   else
     echo "$SSH_PRIVATE_KEY" | ssh-add - 2>/dev/null
