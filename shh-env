@@ -14,6 +14,7 @@ usage() {
   echo "Options:"
   echo "  -h, --help                 Display this help message"
   echo "  -d, --display              Display current environment configuration"
+  echo "  -m, --menu                 Interactive menu to edit environment variables"
   echo "  -s, --set KEY=VALUE        Set an environment variable"
   echo "  -p, --persist              Persist environment to shell config"
   echo "  --reset                    Reset all SHH environment variables to defaults"
@@ -23,6 +24,7 @@ usage() {
   echo "  $(basename "$0") --display              # Show current SHH environment"
   echo "  $(basename "$0") --set SHH_SECRETS=mysecrets   # Set secret name"
   echo "  $(basename "$0") --set SHH_REGION=us-west-2    # Set region"
+  echo "  $(basename "$0") --set SHH_SECRETS=Test/X/123  # Set path-style secret"
   echo "  $(basename "$0") --persist              # Save settings to shell config"
   exit 1
 }
@@ -72,14 +74,6 @@ display_env() {
   echo "SHH_REGION:   ${SHH_REGION:-"<not set, using ${AWS_REGION:-${AWS_DEFAULT_REGION:-$DEFAULT_REGION}} (default)"}"
   echo "SHH_SECRETS:  ${SHH_SECRETS:-"<not set, using $DEFAULT_SECRET_NAME (default)"}"
   echo "SHH_DEBUG:    ${SHH_DEBUG:-"<not set, defaulting to false>"}"
-  echo ""
-
-  # Show related AWS environment for context
-  echo "Related AWS Environment:"
-  echo "----------------------"
-  echo "AWS_REGION:          ${AWS_REGION:-"<not set>"}"
-  echo "AWS_DEFAULT_REGION:  ${AWS_DEFAULT_REGION:-"<not set>"}"
-  echo "AWS_PROFILE:         ${AWS_PROFILE:-"<not set>"}"
   echo ""
 }
 
@@ -164,14 +158,147 @@ reset_env() {
   return 0
 }
 
+# Helper function to convert string to uppercase
+to_upper() {
+  echo "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+# Interactive menu for environment variables
+interactive_menu() {
+  local changes_made=false
+  local exit_menu=false
+  
+  while [ "$exit_menu" = false ]; do
+    clear
+    echo "SHH Environment Configuration Menu"
+    echo "=================================="
+    echo ""
+    display_env
+    echo "Menu Options:"
+    echo "1) Set SHH_REGION (current AWS region)"
+    echo "2) Set SHH_SECRETS (AWS Secrets Manager secret name)"
+    echo "3) Toggle SHH_DEBUG (currently: ${SHH_DEBUG:-false})"
+    echo "S) Save changes to shell config"
+    echo "R) Reset to defaults"
+    echo "X) Exit"
+    echo ""
+    echo -n "Select an option [X]: "
+    
+    read -r choice
+    choice=${choice:-X}
+    choice=$(to_upper "$choice")
+    
+    case "$choice" in
+      1)
+        echo ""
+        echo "Current SHH_REGION: ${SHH_REGION:-"<not set, using ${AWS_REGION:-${AWS_DEFAULT_REGION:-$DEFAULT_REGION}} (default)"}"
+        if [ -n "${AWS_REGION:-}" ]; then
+          echo -n "Set SHH_REGION to AWS_REGION value ($AWS_REGION)? (Y/n): "
+          read -r use_aws_region
+          use_aws_region=$(to_upper "$use_aws_region")
+          if [[ -z "$use_aws_region" || "$use_aws_region" == "Y" ]]; then
+            export SHH_REGION="$AWS_REGION"
+            echo "Set SHH_REGION=$AWS_REGION"
+            changes_made=true
+          else
+            echo -n "Enter new value for SHH_REGION [leave empty for default]: "
+            read -r new_region
+            if [ -n "$new_region" ]; then
+              export SHH_REGION="$new_region"
+              echo "Set SHH_REGION=$new_region"
+              changes_made=true
+            else
+              echo "Keeping current value"
+            fi
+          fi
+        else
+          echo -n "Enter new value for SHH_REGION [leave empty for default]: "
+          read -r new_region
+          if [ -n "$new_region" ]; then
+            export SHH_REGION="$new_region"
+            echo "Set SHH_REGION=$new_region"
+            changes_made=true
+          else
+            echo "Keeping current value"
+          fi
+        fi
+        read -n 1 -s -r -p "Press any key to continue..."
+        ;;
+      2)
+        echo ""
+        echo "Current SHH_SECRETS: ${SHH_SECRETS:-"<not set, using $DEFAULT_SECRET_NAME (default)"}"
+        echo -n "Enter new value for SHH_SECRETS [leave empty for default]: "
+        read -r new_secret
+        if [ -n "$new_secret" ]; then
+          export SHH_SECRETS="$new_secret"
+          echo "Set SHH_SECRETS=$new_secret"
+          changes_made=true
+        else
+          echo "Keeping current value"
+        fi
+        read -n 1 -s -r -p "Press any key to continue..."
+        ;;
+      3)
+        echo ""
+        if [ "${SHH_DEBUG:-false}" = "true" ]; then
+          export SHH_DEBUG="false"
+          echo "SHH_DEBUG turned OFF"
+        else
+          export SHH_DEBUG="true"
+          echo "SHH_DEBUG turned ON"
+        fi
+        changes_made=true
+        read -n 1 -s -r -p "Press any key to continue..."
+        ;;
+      S)
+        if $changes_made; then
+          echo ""
+          persist_env
+          changes_made=false
+        else
+          echo ""
+          echo "No changes made to persist."
+        fi
+        read -n 1 -s -r -p "Press any key to continue..."
+        ;;
+      R)
+        echo ""
+        reset_env
+        changes_made=true
+        read -n 1 -s -r -p "Press any key to continue..."
+        ;;
+      X)
+        if $changes_made; then
+          echo ""
+          echo -n "You have unsaved changes. Save to shell config before exiting? (y/N): "
+          read -r save_before_exit
+          save_before_exit=$(to_upper "$save_before_exit")
+          if [[ "$save_before_exit" == "Y" ]]; then
+            persist_env
+          fi
+        fi
+        exit_menu=true
+        ;;
+      *)
+        echo "Invalid option. Please try again."
+        read -n 1 -s -r -p "Press any key to continue..."
+        ;;
+    esac
+  done
+  
+  return 0
+}
+
 # Parse command line arguments
 if [ $# -eq 0 ]; then
-  usage
+  interactive_menu
+  exit 0
 fi
 
 DO_DISPLAY=false
 DO_PERSIST=false
 DO_RESET=false
+DO_MENU=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -180,6 +307,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -d|--display)
       DO_DISPLAY=true
+      shift
+      ;;
+    -m|--menu)
+      DO_MENU=true
       shift
       ;;
     -s|--set)
@@ -215,12 +346,21 @@ if $DO_RESET; then
   reset_env
 fi
 
-if $DO_DISPLAY || ($DO_RESET == false && $DO_PERSIST == false); then
+if $DO_DISPLAY; then
   display_env
+fi
+
+if $DO_MENU; then
+  interactive_menu
 fi
 
 if $DO_PERSIST; then
   persist_env
+fi
+
+# If no specific action was requested, show the menu
+if ! $DO_DISPLAY && ! $DO_RESET && ! $DO_PERSIST && ! $DO_MENU; then
+  interactive_menu
 fi
 
 exit 0

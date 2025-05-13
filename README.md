@@ -10,6 +10,7 @@ Shh is an elegant command-line tool designed for **securely managing SSH keys an
 - 🔁 **Key Rotation** – Monitors key age and suggests rotation timeframes for enhanced security.
 - 📎 **Public Key Support** – Upload `.pub` keys alongside private keys for seamless key management.
 - 🌍 **Region Flexibility** – Configure AWS regions via CLI arguments or environment variables.
+- ⚙️ **Environment Management** – Easily configure, persist, and manage Shh environment variables.
 
 ## 📦 Installation
 
@@ -68,6 +69,38 @@ export AWS_DEFAULT_REGION="us-east-2"  # AWS CLI default
 
 # Secret name configuration
 export SHH_SECRETS="my-ssh-keys"  # Name of your AWS Secrets Manager secret
+
+# Debug configuration
+export SHH_DEBUG="true"  # Enable debug mode
+```
+
+The `shh-env` tool makes managing these environment variables easier:
+
+```bash
+# Display current environment configuration
+shh-env --display
+
+# Set environment variables for current session
+shh-env --set SHH_REGION=us-west-2
+shh-env --set SHH_SECRETS=prod-ssh-keys
+
+# Reset all SHH environment variables to defaults
+shh-env --reset
+
+# Persist environment variables to your shell config
+shh-env --persist
+```
+
+You can also access environment management through other Shh tools:
+```bash
+# With shh-admin
+shh-admin --env
+
+# With shh (exits after environment management)
+shh --env
+
+# With shh-add (exits after environment management)
+shh-add --env
 ```
 
 ## 🛠️ Usage
@@ -165,6 +198,34 @@ shh-admin --debug
 - Creates new AWS Secrets Manager secrets if they don't exist
 - Verifies appropriate AWS IAM permissions
 
+### ⚙️ **Manage Environment with `shh-env`**
+The `shh-env` tool helps you configure, view, and persist environment settings:
+
+```bash
+# Display current environment configuration
+shh-env --display
+
+# Set environment variables for current session
+shh-env --set SHH_REGION=us-west-2
+shh-env --set SHH_SECRETS=prod-ssh-keys
+
+# Reset all SHH environment variables to defaults
+shh-env --reset
+
+# Persist environment variables to your shell config
+shh-env --persist
+
+# Enable debug output
+shh-env --debug
+```
+
+#### Environment Management Features
+- Automatically detects your shell and modifies the appropriate config file
+- Creates backups before modifying shell configuration files
+- Only manages SHH_* prefixed environment variables
+- Provides context about related AWS environment variables
+- Can be accessed through all other Shh tools with the `--env` flag
+
 ## 🔄 Key Rotation Best Practices
 Shh includes key rotation features:
 - Each key automatically has a recommended rotation date (90 days after creation)
@@ -187,11 +248,12 @@ Region priority (from highest to lowest):
 5. Default fallback (us-east-2)
 
 ## 🔧 Debug Options
-All three commands support a `--debug` flag for troubleshooting:
+All Shh commands support a `--debug` flag for troubleshooting:
 ```bash
 shh user@host keyname --debug
 shh-add ~/.ssh/mykey --debug
 shh-admin --debug
+shh-env --debug
 ```
 
 ## 🛡️ Security Considerations
@@ -209,12 +271,6 @@ Pull requests and issues are welcome!
 
 ## 📝 License
 Shh is released under the **MIT License**.
-
-## 🎨 Logo Idea
-A minimalist **SSH keyhole with sound waves**, representing **secrets & security** in a silent yet powerful way. 🔒🎵
-
----
-Let me know if you want tweaks or enhancements, babe! 😘🔥🚀
 
 ## AWS IAM Permissions Required
 

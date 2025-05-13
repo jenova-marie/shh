@@ -45,7 +45,7 @@ manage_environment() {
   if [ ! -x "$SCRIPT_DIR/shh-env" ]; then
     echo "Error: shh-env script not found or not executable."
     return 1
-  }
+  fi
   
   # First display current environment
   "$SCRIPT_DIR/shh-env" --display
@@ -122,6 +122,8 @@ manage_environment() {
       echo "Invalid choice. Returning to main menu..."
       ;;
   esac
+  
+  return 0
 }
 
 # Check dependencies
@@ -136,10 +138,26 @@ check_dependencies() {
 
 # Function to check AWS credentials
 check_aws_credentials() {
-  if ! aws sts get-caller-identity --region "$1" >/dev/null 2>&1; then
-    echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
-    return 1
+  local region="$1"
+  debug_log "Checking AWS credentials in region: $region"
+  
+  if $DEBUG_MODE; then
+    # Show the actual AWS command and output for debugging
+    echo "Running: aws sts get-caller-identity --region \"$region\""
+    if ! aws sts get-caller-identity --region "$region"; then
+      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+      return 1
+    fi
+  else
+    # Silent mode for normal operation
+    if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
+      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+      echo "Try running with --debug for more information." >&2
+      return 1
+    fi
   fi
+  
+  debug_log "AWS credentials verified successfully"
   return 0
 }
 
@@ -431,13 +449,21 @@ done
 # Check dependencies
 check_dependencies
 
+# If in interactive mode, first suggest environment management
+if [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false && "$MANAGE_ENV" == false ]]; then
+  echo -n "Would you like to set up your environment variables first? (y/n): "
+  read -r ENV_SETUP_CHOICE
+  if [[ "$ENV_SETUP_CHOICE" =~ ^[Yy]$ ]]; then
+    MANAGE_ENV=true
+  fi
+fi
+
 # If environment management is requested, handle it first
 if $MANAGE_ENV; then
   manage_environment
-  # If no other operations are requested, exit after env management
-  if ! $DO_LIST && [ -z "$DETAIL_KEY" ] && ! $CREATE_SECRET; then
-    exit 0
-  fi
+  # After environment management, update the default values from potentially changed env vars
+  REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
+  SECRET_NAME=${SHH_SECRETS:-"testing-secrets"}
 fi
 
 # Check AWS credentials
@@ -445,18 +471,18 @@ if ! check_aws_credentials "$REGION"; then
   exit 1
 fi
 
-# If no arguments provided, run in interactive mode
+# If no arguments provided, run in interactive mode to select secret name
 if [[ -z "$SECRET_NAME" || "$SECRET_NAME" == "$DEFAULT_SECRET_NAME" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false ]]; then
-  echo -n "Enter AWS Secret Manager Secret Name (default: $DEFAULT_SECRET_NAME): "
+  echo -n "Enter AWS Secret Manager Secret Name (default: $SECRET_NAME): "
   read -r custom_secret
-  SECRET_NAME=${custom_secret:-$DEFAULT_SECRET_NAME}
+  SECRET_NAME=${custom_secret:-$SECRET_NAME}
 fi
 
 # If region not specified, ask for it
 if [[ -z "$REGION" || "$REGION" == "$DEFAULT_REGION" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false ]]; then
-  echo -n "Enter AWS region (default: $DEFAULT_REGION): "
+  echo -n "Enter AWS region (default: $REGION): "
   read -r custom_region
-  REGION=${custom_region:-$DEFAULT_REGION}
+  REGION=${custom_region:-$REGION}
 fi
 
 # Export the secret name and region for subsequent use
