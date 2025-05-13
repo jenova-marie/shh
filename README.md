@@ -108,22 +108,28 @@ Each key stored by `shh-add` automatically includes metadata with:
 The `shh` command retrieves keys from AWS Secrets Manager and uses them with SSH:
 
 ```bash
-# Basic syntax
-shh user@hostname key-name [region] [options]
+# Basic syntax (uses username_ed25519 key by default)
+shh user@hostname [region] [options]
 
-# Example: Connect to a server using a specific key
-shh ubuntu@my-server mykey_ed25519 us-east-2
+# Specify a key with -i flag (SSH-style)
+shh -i mykey_ed25519 user@hostname [region] 
+
+# Standard SSH options are passed through
+shh -i mykey_ed25519 -p 2222 user@hostname
 
 # Enable debug output
-shh ubuntu@my-server mykey_ed25519 --debug
+shh --debug user@hostname
 ```
 
 The `shh` command performs the following steps:
-1. Securely retrieves the key from AWS Secrets Manager
-2. Identifies key fingerprint from metadata
-3. Checks if the key is already loaded in `ssh-agent`
-4. Adds the key to `ssh-agent` in memory (no disk writes) if needed
-5. Connects to the specified server
+1. Determines which key to use:
+   - If specified with `-i`, uses that key name
+   - Otherwise, defaults to `username_ed25519` based on the user part of user@host
+2. Securely retrieves the key from AWS Secrets Manager
+3. Identifies key fingerprint from metadata
+4. Checks if the key is already loaded in `ssh-agent`
+5. Adds the key to `ssh-agent` in memory (no disk writes) if needed
+6. Connects to the specified server
 
 ### 🔍 **Manage Keys with `shh-admin`**
 The `shh-admin` tool helps you manage your secrets in AWS Secrets Manager:
@@ -209,3 +215,31 @@ A minimalist **SSH keyhole with sound waves**, representing **secrets & security
 
 ---
 Let me know if you want tweaks or enhancements, babe! 😘🔥🚀
+
+## AWS IAM Permissions Required
+
+The following AWS IAM permissions are required for Shh to function properly:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "secretsmanager:CreateSecret",
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:UpdateSecret",
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:ListSecrets"
+            ],
+            "Resource": "arn:aws:secretsmanager:*:*:secret:YOUR-SECRET-NAME-*"
+        }
+    ]
+}
+```
+
+Replace `YOUR-SECRET-NAME` with your actual secret name (e.g., `ssh-keys`). For secrets with path-like structures (e.g., `Test/X/123`), use the full path in the resource name.
+
+You can attach this policy to your IAM user or role through the AWS Management Console or AWS CLI.

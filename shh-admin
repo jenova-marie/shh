@@ -15,6 +15,7 @@ usage() {
   echo "  -s, --secret NAME         Secret name (default: $DEFAULT_SECRET_NAME)"
   echo "  -l, --list                List keys in the secret"
   echo "  -d, --detail KEY_NAME     Show details for a specific key"
+  echo "  -c, --create              Create the secret if it doesn't exist, non-interactive mode"
   echo "  --debug                   Enable verbose debugging output"
   echo ""
   echo "Environment variables (in order of precedence):"
@@ -74,14 +75,46 @@ create_secret() {
     aws_debug_flag="--debug"
   fi
   
-  if aws secretsmanager create-secret --name "$secret_name" --region "$region" --secret-string '{}' $aws_debug_flag >/dev/null 2>&1; then
-    echo "Secret '$secret_name' created successfully."
-    return 0
+  # AWS CLI requires special handling for secret names with slashes
+  if [[ "$secret_name" == */* ]]; then
+    debug_log "Secret name contains slashes, using special handling for creation"
+    
+    if aws secretsmanager create-secret \
+        --name "$secret_name" \
+        --region "$region" \
+        --secret-string '{}' \
+        $aws_debug_flag >/dev/null 2>&1; then
+      echo "Secret '$secret_name' created successfully."
+      return 0
+    else
+      echo "Error: Failed to create secret '$secret_name'" >&2
+      echo "Make sure you have the following IAM permissions for secret '$secret_name':"
+      echo "  - secretsmanager:CreateSecret"
+      echo "  - secretsmanager:GetSecretValue"
+      echo "  - secretsmanager:PutSecretValue"
+      echo "  - secretsmanager:UpdateSecret"
+      echo "  - secretsmanager:DescribeSecret"
+      return 1
+    fi
   else
-    echo "Error: Failed to create secret '$secret_name'" >&2
-    echo "Make sure you have the following IAM permissions:"
-    echo "  - secretsmanager:CreateSecret"
-    return 1
+    # No slashes in name, use standard creation
+    if aws secretsmanager create-secret \
+        --name "$secret_name" \
+        --region "$region" \
+        --secret-string '{}' \
+        $aws_debug_flag >/dev/null 2>&1; then
+      echo "Secret '$secret_name' created successfully."
+      return 0
+    else
+      echo "Error: Failed to create secret '$secret_name'" >&2
+      echo "Make sure you have the following IAM permissions for secret '$secret_name':"
+      echo "  - secretsmanager:CreateSecret"
+      echo "  - secretsmanager:GetSecretValue"
+      echo "  - secretsmanager:PutSecretValue"
+      echo "  - secretsmanager:UpdateSecret"
+      echo "  - secretsmanager:DescribeSecret"
+      return 1
+    fi
   fi
 }
 
@@ -261,6 +294,7 @@ REGION="$DEFAULT_REGION"
 SECRET_NAME="$DEFAULT_SECRET_NAME"
 DO_LIST=false
 DETAIL_KEY=""
+CREATE_SECRET=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -283,6 +317,10 @@ while [[ $# -gt 0 ]]; do
       DETAIL_KEY="$2"
       shift 2
       ;;
+    -c|--create)
+      CREATE_SECRET=true
+      shift
+      ;;
     --debug)
       DEBUG_MODE=true
       shift
@@ -303,14 +341,14 @@ if ! check_aws_credentials "$REGION"; then
 fi
 
 # If no arguments provided, run in interactive mode
-if [[ -z "$SECRET_NAME" || "$SECRET_NAME" == "$DEFAULT_SECRET_NAME" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false ]]; then
+if [[ -z "$SECRET_NAME" || "$SECRET_NAME" == "$DEFAULT_SECRET_NAME" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false ]]; then
   echo -n "Enter AWS Secret Manager Secret Name (default: $DEFAULT_SECRET_NAME): "
   read -r custom_secret
   SECRET_NAME=${custom_secret:-$DEFAULT_SECRET_NAME}
 fi
 
 # If region not specified, ask for it
-if [[ -z "$REGION" || "$REGION" == "$DEFAULT_REGION" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false ]]; then
+if [[ -z "$REGION" || "$REGION" == "$DEFAULT_REGION" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false ]]; then
   echo -n "Enter AWS region (default: $DEFAULT_REGION): "
   read -r custom_region
   REGION=${custom_region:-$DEFAULT_REGION}
@@ -329,17 +367,27 @@ if check_secret "$SECRET_NAME" "$REGION"; then
   # Check IAM permissions
   check_iam_permissions "$SECRET_NAME" "$REGION"
 else
-  echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
-  read -r CONFIRM
-  if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+  if [ "$CREATE_SECRET" = true ]; then
+    # Non-interactive creation requested
     if create_secret "$SECRET_NAME" "$REGION"; then
       check_iam_permissions "$SECRET_NAME" "$REGION"
     else
       exit 1
     fi
   else
-    echo "Secret creation canceled."
-    exit 1
+    # Interactive mode
+    echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
+    read -r CONFIRM
+    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+      if create_secret "$SECRET_NAME" "$REGION"; then
+        check_iam_permissions "$SECRET_NAME" "$REGION"
+      else
+        exit 1
+      fi
+    else
+      echo "Secret creation canceled."
+      exit 1
+    fi
   fi
 fi
 

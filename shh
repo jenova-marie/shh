@@ -10,15 +10,17 @@ DEBUG_MODE=false
 
 # Function to display usage
 usage() {
-  echo "Usage: $(basename "$0") <user@host> <key-name> [region] [options]"
+  echo "Usage: $(basename "$0") [options] <user@host> [region]"
   echo ""
   echo "Arguments:"
   echo "  user@host      Remote SSH destination"
-  echo "  key-name       Name of the SSH key stored in AWS Secrets Manager"
   echo "  region         AWS region (default: $DEFAULT_REGION)"
   echo ""
   echo "Options:"
+  echo "  -i <key-name>  Specify the SSH key name stored in AWS Secrets Manager"
+  echo "                 (default: uses '<username>_ed25519' from user@host)"
   echo "  --debug        Enable verbose debugging output"
+  echo "  --help         Display this help message"
   echo ""
   echo "Environment variables (in order of precedence):"
   echo "  SHH_REGION           Preferred AWS region"
@@ -47,32 +49,64 @@ check_dependencies() {
 
 # Function to check AWS credentials
 check_aws_credentials() {
-  if ! aws sts get-caller-identity --region "$1" >/dev/null 2>&1; then
+  local region="$1"
+  debug_log "Checking AWS credentials in region: $region"
+  
+  # Step 1: Verify basic identity
+  debug_log "Verifying AWS identity..."
+  if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
     echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
     return 1
   fi
+  
+  # Step 2: Verify Secrets Manager access for the specific secret
+  debug_log "Verifying Secrets Manager permissions for $SECRET_NAME..."
+  if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$region" >/dev/null 2>&1; then
+    echo "Error: Cannot access secret '$SECRET_NAME' in region '$region'. Check permissions or if the secret exists." >&2
+    return 1
+  fi
+  
+  debug_log "AWS credentials and permissions verified successfully"
   return 0
 }
 
 # Parse arguments
-USER_HOST=""
 KEY_NAME=""
+USER_HOST=""
 REGION=""
+SSH_OPTS=()
 
+# Add default SSH options
+SSH_OPTS+=("-o" "StrictHostKeyChecking=accept-new")
+
+# Parse command line options first (following ssh style)
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -i)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: -i option requires an argument" >&2
+        usage
+      fi
+      KEY_NAME="$2"
+      shift 2
+      ;;
     --debug)
       DEBUG_MODE=true
+      SSH_OPTS+=("-v")
       shift
       ;;
-    --help)
+    --help|-h)
       usage
       ;;
+    -*)
+      # Pass through any other SSH options
+      SSH_OPTS+=("$1")
+      shift
+      ;;
     *)
+      # Non-option arguments
       if [ -z "$USER_HOST" ]; then
         USER_HOST="$1"
-      elif [ -z "$KEY_NAME" ]; then
-        KEY_NAME="$1"
       elif [ -z "$REGION" ]; then
         REGION="$1"
       else
@@ -85,9 +119,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required arguments
-if [ -z "$USER_HOST" ] || [ -z "$KEY_NAME" ]; then
-  echo "Error: Missing required arguments." >&2
+if [ -z "$USER_HOST" ]; then
+  echo "Error: Missing user@host argument." >&2
   usage
+fi
+
+# If KEY_NAME is not specified, derive it from username
+if [ -z "$KEY_NAME" ]; then
+  # Extract username from user@host
+  USERNAME=$(echo "$USER_HOST" | cut -d '@' -f 1)
+  KEY_NAME="${USERNAME}_ed25519"
+  debug_log "No key specified, defaulting to '$KEY_NAME'"
 fi
 
 # Set region if not provided
@@ -209,11 +251,7 @@ if [ "$IS_KEY_LOADED" = false ]; then
 fi
 
 # SSH into the host using the loaded key
-debug_log "Connecting to $USER_HOST..."
-if $DEBUG_MODE; then
-  ssh -v -o StrictHostKeyChecking=accept-new "$USER_HOST"
-else
-  ssh -o StrictHostKeyChecking=accept-new "$USER_HOST"
-fi
+debug_log "Connecting to $USER_HOST using key '$KEY_NAME'..."
+ssh "${SSH_OPTS[@]}" "$USER_HOST"
 
 exit 0

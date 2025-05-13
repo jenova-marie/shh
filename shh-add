@@ -8,6 +8,7 @@ DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
 DEFAULT_SECRET_NAME=${SHH_SECRETS:-"testing-secrets"}
 DEBUG_MODE=false
 ADD_TO_AGENT=true  # Default to adding key to SSH agent
+UPLOAD_PUB=true    # Default to uploading public key
 
 # Function to display usage
 usage() {
@@ -19,7 +20,7 @@ usage() {
   echo "  region         AWS region (defaults to $DEFAULT_REGION)"
   echo ""
   echo "Options:"
-  echo "  --pub          Upload the public key (.pub) alongside the private key"
+  echo "  --no-pub       Don't upload the public key (.pub) alongside the private key"
   echo "  --only         Only upload the specified file, skip public key and fingerprint"
   echo "  --debug        Enable verbose debugging output"
   echo "  --no-ssh-add   Don't add the key to the SSH agent"
@@ -91,14 +92,13 @@ shift
 # Check for optional arguments
 PROPERTY_NAME=""
 REGION=""
-UPLOAD_PUB=false
 UPLOAD_FP=true
 ONLY_MODE=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --pub)
-      UPLOAD_PUB=true
+    --no-pub)
+      UPLOAD_PUB=false
       shift
       ;;
     --only)
@@ -146,14 +146,64 @@ export AWS_DEFAULT_REGION="$REGION"
 # Check dependencies
 check_dependencies
 
-# Check AWS credentials
-if ! check_aws_credentials "$REGION"; then
-  exit 1
-fi
-
 # Ensure the file exists
 if [ ! -f "$FILE_PATH" ]; then
   echo "Error: File '$FILE_PATH' not found!"
+  exit 1
+fi
+
+# SECURITY CHECK: Verify user has access to the key by trying to add it to ssh-agent first
+if [ "$ADD_TO_AGENT" = true ]; then
+  echo "Verifying access to private key..."
+  
+  # Start ssh-agent if not running
+  if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
+    debug_log "Starting ssh-agent..."
+    if $DEBUG_MODE; then
+      eval "$(ssh-agent -s)"
+    else
+      eval "$(ssh-agent -s)" >/dev/null
+    fi
+  fi
+  
+  # Calculate fingerprint if public key is available for checking if already loaded
+  SSH_KEY_FP=""
+  if [ -f "$FILE_PATH.pub" ]; then
+    SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" 2>/dev/null | awk '{print $2}' || echo "")
+    debug_log "Fingerprint: $SSH_KEY_FP"
+    
+    # Check if the key is already in ssh-agent using fingerprint
+    if [ -n "$SSH_KEY_FP" ] && ssh-add -l 2>/dev/null | grep -q "$SSH_KEY_FP"; then
+      debug_log "Key is already loaded in ssh-agent."
+      echo "Key is already loaded in SSH agent."
+    else
+      # Try to add the key to ssh-agent to verify user has access
+      debug_log "Attempting to add key to ssh-agent..."
+      
+      if ! ssh-add "$FILE_PATH" 2>/dev/null; then
+        echo "Error: Failed to add key to SSH agent. You may not have permission to use this key." >&2
+        echo "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
+        exit 1
+      fi
+      
+      echo "Successfully verified access to private key."
+    fi
+  else
+    # No public key to check fingerprint, try to add directly
+    debug_log "No public key found, attempting to add private key directly..."
+    
+    if ! ssh-add "$FILE_PATH" 2>/dev/null; then
+      echo "Error: Failed to add key to SSH agent. You may not have permission to use this key." >&2
+      echo "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
+      exit 1
+    fi
+    
+    echo "Successfully verified access to private key."
+  fi
+fi
+
+# Now check AWS credentials
+if ! check_aws_credentials "$REGION"; then
   exit 1
 fi
 
@@ -171,23 +221,30 @@ if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_
     exit 1
   fi
   
-  # Try to create the secret if it doesn't exist
-  echo "Attempting to create secret '$SECRET_NAME'..."
-  local debug_flag=""
+  # Try to create the secret using shh-admin
+  echo "Attempting to create secret '$SECRET_NAME' using shh-admin..."
+  
+  # Prepare debug flag
+  admin_debug_flag=""
   if $DEBUG_MODE; then
-    debug_flag="--debug"
+    admin_debug_flag="--debug"
   fi
   
-  if ! aws secretsmanager create-secret --name "$SECRET_NAME" --region "$REGION" --secret-string '{}' $debug_flag; then
-    echo "Error: Failed to create secret '$SECRET_NAME'. Check your AWS permissions."
-    echo "Make sure you have the following IAM permissions:"
-    echo "  - secretsmanager:CreateSecret"
-    echo "  - secretsmanager:PutSecretValue"
-    echo "  - secretsmanager:UpdateSecret"
+  # Get the directory of the current script to find shh-admin
+  SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+  
+  # Call shh-admin to create the secret
+  if ! "$SCRIPT_DIR/shh-admin" --secret "$SECRET_NAME" --region "$REGION" --create $admin_debug_flag; then
+    echo "Error: Failed to create secret '$SECRET_NAME' using shh-admin."
     exit 1
   fi
   
-  EXISTING_SECRET="{}"
+  # Now get the empty secret JSON
+  if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
+    echo "Error: Failed to retrieve newly created secret '$SECRET_NAME'."
+    exit 1
+  fi
+  
   debug_log "Initialized new secret with empty JSON object"
 fi
 
@@ -358,7 +415,8 @@ if $DEBUG_MODE; then
        $aws_debug_flag; then
     rm -f "$TMP_JSON_FILE"
     echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
-    echo "Make sure you have the following IAM permissions:"
+    echo "Make sure you have the following IAM permissions for secret '$SECRET_NAME':"
+    echo "  - secretsmanager:GetSecretValue"
     echo "  - secretsmanager:PutSecretValue"
     echo "  - secretsmanager:UpdateSecret"
     exit 1
@@ -372,7 +430,8 @@ else
        > /dev/null 2>&1; then
     rm -f "$TMP_JSON_FILE"
     echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
-    echo "Make sure you have the following IAM permissions:"
+    echo "Make sure you have the following IAM permissions for secret '$SECRET_NAME':"
+    echo "  - secretsmanager:GetSecretValue"
     echo "  - secretsmanager:PutSecretValue"
     echo "  - secretsmanager:UpdateSecret"
     exit 1
@@ -383,54 +442,5 @@ fi
 rm -f "$TMP_JSON_FILE"
 
 echo "Successfully updated secret '$SECRET_NAME' with new property '$PROPERTY_NAME'."
-
-# Add key to SSH agent if requested
-if [ "$ADD_TO_AGENT" = true ]; then
-  echo "Adding key to SSH agent..."
-  
-  # Start ssh-agent if not running
-  if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
-    debug_log "Starting ssh-agent..."
-    if $DEBUG_MODE; then
-      eval "$(ssh-agent -s)"
-    else
-      eval "$(ssh-agent -s)" >/dev/null
-    fi
-  fi
-  
-  # Check if the key is already in ssh-agent using fingerprint
-  IS_KEY_LOADED=false
-  if [ -n "$SSH_KEY_FP" ]; then
-    if ssh-add -l 2>/dev/null | grep -q "$SSH_KEY_FP"; then
-      debug_log "Key '$PROPERTY_NAME' is already loaded in ssh-agent, skipping ssh-add."
-      echo "Key already loaded in SSH agent."
-      IS_KEY_LOADED=true
-    else
-      debug_log "Key '$PROPERTY_NAME' not loaded in ssh-agent, adding it now..."
-      IS_KEY_LOADED=false
-    fi
-  else
-    debug_log "Key fingerprint not found, can't check if key is loaded in ssh-agent."
-    debug_log "Will attempt to load the key."
-    IS_KEY_LOADED=false
-  fi
-  
-  # Add key to ssh-agent if not already loaded
-  if [ "$IS_KEY_LOADED" = false ]; then
-    if $DEBUG_MODE; then
-      if ssh-add "$FILE_PATH"; then
-        echo "Key added to SSH agent successfully."
-      else
-        echo "Failed to add key to SSH agent. Check if the key is password-protected." >&2
-      fi
-    else
-      if ssh-add "$FILE_PATH" 2>/dev/null; then
-        echo "Key added to SSH agent successfully."
-      else
-        echo "Failed to add key to SSH agent. Check if the key is password-protected." >&2
-      fi
-    fi
-  fi
-fi
 
 exit 0
