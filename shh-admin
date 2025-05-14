@@ -16,7 +16,7 @@ usage() {
   echo "  -l, --list                List keys in the secret"
   echo "  -d, --detail KEY_NAME     Show details for a specific key"
   echo "  -c, --create              Create the secret if it doesn't exist, non-interactive mode"
-  echo "  -e, --env                 Manage environment variables with shh-env"
+  echo "  -e, --env                 Only manage environment variables without proceeding to AWS operations"
   echo "  --debug                   Enable verbose debugging output"
   echo ""
   echo "Environment variables (in order of precedence):"
@@ -37,6 +37,24 @@ debug_log() {
 # Get the directory of the current script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Function to check if environment is properly configured
+check_environment_configuration() {
+  local missing_vars=()
+  
+  # Check for SHH_SECRETS
+  if [ -z "${SHH_SECRETS}" ]; then
+    missing_vars+=("SHH_SECRETS")
+  fi
+  
+  # Check for region from any of the possible sources
+  if [ -z "${SHH_REGION}" ] && [ -z "${AWS_REGION}" ] && [ -z "${AWS_DEFAULT_REGION}" ]; then
+    missing_vars+=("SHH_REGION")
+  fi
+  
+  # Return the number of missing variables
+  echo ${#missing_vars[@]}
+}
+
 # Function to manage environment
 manage_environment() {
   echo "Managing SHH environment variables..."
@@ -47,8 +65,25 @@ manage_environment() {
     return 1
   fi
   
+  # Check for missing required variables to highlight them
+  local missing_vars=()
+  if [ -z "${SHH_SECRETS}" ]; then
+    missing_vars+=("SHH_SECRETS")
+  fi
+  
+  if [ -z "${SHH_REGION}" ] && [ -z "${AWS_REGION}" ] && [ -z "${AWS_DEFAULT_REGION}" ]; then
+    missing_vars+=("SHH_REGION")
+  fi
+  
   # First display current environment
   "$SCRIPT_DIR/shh-env" --display
+  
+  # If there are missing variables, highlight them
+  if [ ${#missing_vars[@]} -gt 0 ]; then
+    echo ""
+    echo "ATTENTION: The following required variables are not set: ${missing_vars[*]}"
+    echo "These must be configured for Shh to work properly."
+  fi
   
   # Ask if user wants to modify environment
   echo ""
@@ -56,16 +91,25 @@ manage_environment() {
   echo "1) Set a new environment variable"
   echo "2) Reset all environment variables to defaults"
   echo "3) Persist current environment to shell config"
-  echo "4) Return to main menu"
+  echo "4) Return to main menu / continue"
   echo ""
-  echo -n "Enter your choice [4]: "
+  echo -n "Enter your choice [1]: "
   read -r CHOICE
-  CHOICE=${CHOICE:-4}
+  CHOICE=${CHOICE:-1}
   
   case "$CHOICE" in
     1)
       echo ""
       echo "Available variables to set:"
+      
+      # Show missing variables first with highlighting
+      if [ ${#missing_vars[@]} -gt 0 ]; then
+        for var in "${missing_vars[@]}"; do
+          echo "- $var   (REQUIRED, currently not set)"
+        done
+      fi
+      
+      # Show other variables
       echo "- SHH_REGION   (current region for AWS operations)"
       echo "- SHH_SECRETS  (default secret name)"
       echo "- SHH_DEBUG    (enable debug mode, true/false)"
@@ -86,10 +130,32 @@ manage_environment() {
       # Export in current session too
       export "$VAR_NAME"="$VAR_VALUE"
       
+      # If there are still missing required variables, recurse to continue setup
+      export SHH_SECRETS="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
+      export SHH_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+      export AWS_DEFAULT_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+      
+      # Check if we need to continue with configuration
+      missing_vars=()
+      if [ -z "${SHH_SECRETS}" ]; then
+        missing_vars+=("SHH_SECRETS")
+      fi
+      
+      if [ -z "${SHH_REGION}" ] && [ -z "${AWS_REGION}" ] && [ -z "${AWS_DEFAULT_REGION}" ]; then
+        missing_vars+=("SHH_REGION")
+      fi
+      
+      if [ ${#missing_vars[@]} -gt 0 ]; then
+        echo ""
+        echo "Some required variables are still not set. Let's continue configuration."
+        manage_environment
+        return $?
+      fi
+      
       # Ask if user wants to persist
-      echo -n "Would you like to persist this change to your shell config? (y/n) [n]: "
+      echo -n "Would you like to persist this change to your shell config? (y/n) [y]: "
       read -r PERSIST
-      PERSIST=${PERSIST:-n}
+      PERSIST=${PERSIST:-y}
       
       if [[ "$PERSIST" =~ ^[Yy]$ ]]; then
         "$SCRIPT_DIR/shh-env" --persist
@@ -102,11 +168,12 @@ manage_environment() {
       export SHH_REGION="$DEFAULT_REGION"
       export SHH_SECRETS="$DEFAULT_SECRET_NAME"
       export SHH_DEBUG="false"
+      export AWS_DEFAULT_REGION="$DEFAULT_REGION"
       
       # Ask if user wants to persist
-      echo -n "Would you like to persist these defaults to your shell config? (y/n) [n]: "
+      echo -n "Would you like to persist these defaults to your shell config? (y/n) [y]: "
       read -r PERSIST
-      PERSIST=${PERSIST:-n}
+      PERSIST=${PERSIST:-y}
       
       if [[ "$PERSIST" =~ ^[Yy]$ ]]; then
         "$SCRIPT_DIR/shh-env" --persist
@@ -116,14 +183,140 @@ manage_environment() {
       "$SCRIPT_DIR/shh-env" --persist
       ;;
     4)
-      echo "Returning to main menu..."
+      if [ ${#missing_vars[@]} -gt 0 ]; then
+        echo "Warning: Some required variables are still not set. Shh may not work correctly."
+        echo "You can run 'shh-env' at any time to complete configuration."
+      else
+        echo "Environment configuration is complete."
+      fi
       ;;
     *)
-      echo "Invalid choice. Returning to main menu..."
+      echo "Invalid choice. Please try again."
+      manage_environment
       ;;
   esac
   
   return 0
+}
+
+# Function to provide detailed AWS IAM diagnostics and recommendations
+provide_iam_diagnostics() {
+  local secret_name="$1"
+  local region="$2"
+  local action="$3"
+  
+  echo "=== AWS IAM Diagnostics ==="
+  echo "Problem detected: Unable to $action the secret '$secret_name' in region '$region'"
+  echo ""
+  
+  # Check basic identity
+  echo "Checking your AWS identity..."
+  local identity
+  if identity=$(aws sts get-caller-identity 2>/dev/null); then
+    local account_id=$(echo "$identity" | jq -r '.Account')
+    local user_arn=$(echo "$identity" | jq -r '.Arn')
+    echo "You are authenticated as: $user_arn"
+    echo "Account ID: $account_id"
+  else
+    echo "Error: Unable to get your AWS identity. Your credentials may be invalid or expired."
+    echo "Run 'aws configure' to update your AWS credentials."
+    return 1
+  fi
+  
+  # Prepare the resource ARN pattern
+  local resource_arn="arn:aws:secretsmanager:$region:$account_id:secret:$secret_name"
+  
+  # Add wildcard for path-style secrets
+  if [[ "$secret_name" == */* ]]; then
+    resource_arn="$resource_arn-*"
+  else
+    resource_arn="$resource_arn-*"
+  fi
+  
+  echo ""
+  echo "Required permissions:"
+  echo "For managing secrets, you need the following IAM permissions:"
+  
+  case "$action" in
+    "create")
+      echo "- secretsmanager:CreateSecret"
+      echo "- secretsmanager:PutSecretValue"
+      echo "- secretsmanager:GetSecretValue"
+      ;;
+    "access")
+      echo "- secretsmanager:GetSecretValue"
+      echo "- secretsmanager:DescribeSecret"
+      ;;
+    "update")
+      echo "- secretsmanager:PutSecretValue"
+      echo "- secretsmanager:UpdateSecret"
+      echo "- secretsmanager:GetSecretValue"
+      ;;
+    *)
+      echo "- secretsmanager:CreateSecret"
+      echo "- secretsmanager:GetSecretValue"
+      echo "- secretsmanager:PutSecretValue"
+      echo "- secretsmanager:UpdateSecret"
+      echo "- secretsmanager:DescribeSecret"
+      echo "- secretsmanager:ListSecrets"
+      ;;
+  esac
+  
+  echo ""
+  echo "Suggested IAM policy to attach to your user/role:"
+  echo ""
+  echo '{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "secretsmanager:CreateSecret",
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:UpdateSecret",
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:ListSecrets"
+            ],
+            "Resource": "'"$resource_arn"'"
+        }
+    ]
+}'
+  
+  echo ""
+  echo "You can create this policy using the AWS CLI with:"
+  local policy_name="ShhSecrets-$secret_name"
+  policy_name=${policy_name//\//-} # Replace slashes with dashes for policy name
+  
+  echo ""
+  echo "# 1. Create a policy JSON file"
+  echo "cat > shh-policy.json << 'EOL'"
+  echo '{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "secretsmanager:CreateSecret",
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:UpdateSecret",
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:ListSecrets"
+            ],
+            "Resource": "'"$resource_arn"'"
+        }
+    ]
+}'
+  echo "EOL"
+  echo ""
+  echo "# 2. Create the policy in AWS"
+  echo "aws iam create-policy --policy-name $policy_name --policy-document file://shh-policy.json"
+  echo ""
+  echo "# 3. Attach the policy to your user (replace USERNAME with your IAM username)"
+  echo "aws iam attach-user-policy --user-name USERNAME --policy-arn arn:aws:iam::$account_id:policy/$policy_name"
+  echo ""
+  echo "For security best practices, consider using more restrictive permissions appropriate for your use case."
 }
 
 # Check dependencies
@@ -197,12 +390,7 @@ create_secret() {
       return 0
     else
       echo "Error: Failed to create secret '$secret_name'" >&2
-      echo "Make sure you have the following IAM permissions for secret '$secret_name':"
-      echo "  - secretsmanager:CreateSecret"
-      echo "  - secretsmanager:GetSecretValue"
-      echo "  - secretsmanager:PutSecretValue"
-      echo "  - secretsmanager:UpdateSecret"
-      echo "  - secretsmanager:DescribeSecret"
+      provide_iam_diagnostics "$secret_name" "$region" "create"
       return 1
     fi
   else
@@ -216,12 +404,7 @@ create_secret() {
       return 0
     else
       echo "Error: Failed to create secret '$secret_name'" >&2
-      echo "Make sure you have the following IAM permissions for secret '$secret_name':"
-      echo "  - secretsmanager:CreateSecret"
-      echo "  - secretsmanager:GetSecretValue"
-      echo "  - secretsmanager:PutSecretValue"
-      echo "  - secretsmanager:UpdateSecret"
-      echo "  - secretsmanager:DescribeSecret"
+      provide_iam_diagnostics "$secret_name" "$region" "create"
       return 1
     fi
   fi
@@ -272,6 +455,7 @@ list_keys() {
   local secret_json
   if ! secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" --query 'SecretString' --output text 2>/dev/null); then
     echo "Error: Unable to retrieve secret '$secret_name'" >&2
+    provide_iam_diagnostics "$secret_name" "$region" "access"
     return 1
   fi
   
@@ -327,6 +511,7 @@ show_key_details() {
   local secret_json
   if ! secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_name" --region "$region" --query 'SecretString' --output text 2>/dev/null); then
     echo "Error: Unable to retrieve secret '$secret_name'" >&2
+    provide_iam_diagnostics "$secret_name" "$region" "access"
     return 1
   fi
   
@@ -398,154 +583,142 @@ show_key_details() {
   fi
 }
 
-# Parse command line arguments
-REGION="$DEFAULT_REGION"
-SECRET_NAME="$DEFAULT_SECRET_NAME"
-DO_LIST=false
-DETAIL_KEY=""
-CREATE_SECRET=false
-MANAGE_ENV=false
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -h|--help)
-      usage
-      ;;
-    -r|--region)
-      REGION="$2"
-      shift 2
-      ;;
-    -s|--secret)
-      SECRET_NAME="$2"
-      shift 2
-      ;;
-    -l|--list)
-      DO_LIST=true
-      shift
-      ;;
-    -d|--detail)
-      DETAIL_KEY="$2"
-      shift 2
-      ;;
-    -c|--create)
-      CREATE_SECRET=true
-      shift
-      ;;
-    -e|--env)
-      MANAGE_ENV=true
-      shift
-      ;;
-    --debug)
-      DEBUG_MODE=true
-      shift
-      ;;
-    *)
-      echo "Unknown option: $1" >&2
-      usage
-      ;;
-  esac
-done
-
-# Check dependencies
-check_dependencies
-
-# If in interactive mode, first suggest environment management
-if [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false && "$MANAGE_ENV" == false ]]; then
-  echo -n "Would you like to set up your environment variables first? (y/n): "
-  read -r ENV_SETUP_CHOICE
-  if [[ "$ENV_SETUP_CHOICE" =~ ^[Yy]$ ]]; then
-    MANAGE_ENV=true
-  fi
-fi
-
-# If environment management is requested, handle it first
-if $MANAGE_ENV; then
-  manage_environment
-  # After environment management, update the default values from potentially changed env vars
-  REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
-  SECRET_NAME=${SHH_SECRETS:-"testing-secrets"}
-fi
-
-# Check AWS credentials
-if ! check_aws_credentials "$REGION"; then
-  exit 1
-fi
-
-# If no arguments provided, run in interactive mode to select secret name
-if [[ -z "$SECRET_NAME" || "$SECRET_NAME" == "$DEFAULT_SECRET_NAME" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false ]]; then
-  echo -n "Enter AWS Secret Manager Secret Name (default: $SECRET_NAME): "
-  read -r custom_secret
-  SECRET_NAME=${custom_secret:-$SECRET_NAME}
-fi
-
-# If region not specified, ask for it
-if [[ -z "$REGION" || "$REGION" == "$DEFAULT_REGION" ]] && [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false ]]; then
-  echo -n "Enter AWS region (default: $REGION): "
-  read -r custom_region
-  REGION=${custom_region:-$REGION}
-fi
-
-# Export the secret name and region for subsequent use
-export SHH_SECRETS="$SECRET_NAME"
-export SHH_REGION="$REGION"
-export AWS_DEFAULT_REGION="$REGION"
-echo "Using AWS Secret: $SHH_SECRETS in region: $REGION"
-
-# Check if secret exists
-if check_secret "$SECRET_NAME" "$REGION"; then
-  echo "Secret '$SECRET_NAME' exists."
+# Main function to handle the flow of the script
+main() {
+  # Parse command line arguments
+  REGION="$DEFAULT_REGION"
+  SECRET_NAME="$DEFAULT_SECRET_NAME"
+  DO_LIST=false
+  DETAIL_KEY=""
+  CREATE_SECRET=false
+  ENV_ONLY=false
   
-  # Check IAM permissions
-  check_iam_permissions "$SECRET_NAME" "$REGION"
-else
-  if [ "$CREATE_SECRET" = true ]; then
-    # Non-interactive creation requested
-    if create_secret "$SECRET_NAME" "$REGION"; then
-      check_iam_permissions "$SECRET_NAME" "$REGION"
-    else
-      exit 1
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        usage
+        ;;
+      -r|--region)
+        REGION="$2"
+        shift 2
+        ;;
+      -s|--secret)
+        SECRET_NAME="$2"
+        shift 2
+        ;;
+      -l|--list)
+        DO_LIST=true
+        shift
+        ;;
+      -d|--detail)
+        DETAIL_KEY="$2"
+        shift 2
+        ;;
+      -c|--create)
+        CREATE_SECRET=true
+        shift
+        ;;
+      -e|--env)
+        ENV_ONLY=true
+        shift
+        ;;
+      --debug)
+        DEBUG_MODE=true
+        shift
+        ;;
+      *)
+        echo "Unknown option: $1" >&2
+        usage
+        ;;
+    esac
+  done
+  
+  # Check dependencies
+  check_dependencies
+  
+  # Check if environment is properly configured
+  local missing_env_vars=$(check_environment_configuration)
+  if [ $missing_env_vars -gt 0 ]; then
+    echo "Environment not fully configured. Starting environment setup..."
+    manage_environment
+    
+    # Re-check environment after setup
+    missing_env_vars=$(check_environment_configuration)
+    if [ $missing_env_vars -gt 0 ] && [ "$ENV_ONLY" = false ]; then
+      echo "Warning: Environment still not fully configured. Proceeding with available settings."
     fi
-else
-    # Interactive mode
-  echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
-    read -r CONFIRM
-  if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+  fi
+  
+  # If environment-only mode, exit here
+  if [ "$ENV_ONLY" = true ]; then
+    echo "Environment configuration completed. Exiting as requested (--env mode)."
+    exit 0
+  fi
+  
+  # Export updated values for secret and region
+  export SHH_SECRETS="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
+  export SHH_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+  export AWS_DEFAULT_REGION="${SHH_REGION:-$DEFAULT_REGION}"
+  SECRET_NAME="${SHH_SECRETS}"
+  REGION="${SHH_REGION}"
+  
+  echo "Using AWS Secret: $SECRET_NAME in region: $REGION"
+  
+  # Check AWS credentials
+  if ! check_aws_credentials "$REGION"; then
+    exit 1
+  fi
+  
+  # Check if secret exists, create if needed
+  if check_secret "$SECRET_NAME" "$REGION"; then
+    echo "Secret '$SECRET_NAME' exists."
+    
+    # Check IAM permissions
+    check_iam_permissions "$SECRET_NAME" "$REGION"
+  else
+    if [ "$CREATE_SECRET" = true ]; then
+      # Non-interactive creation requested
       if create_secret "$SECRET_NAME" "$REGION"; then
         check_iam_permissions "$SECRET_NAME" "$REGION"
       else
         exit 1
       fi
-  else
-    echo "Secret creation canceled."
-      exit 1
+    else
+      # Interactive mode
+      echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
+      read -r CONFIRM
+      if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+        if create_secret "$SECRET_NAME" "$REGION"; then
+          check_iam_permissions "$SECRET_NAME" "$REGION"
+        else
+          exit 1
+        fi
+      else
+        echo "Secret creation canceled."
+        exit 1
+      fi
     fi
   fi
-fi
-
-# Show key details if requested
-if [[ -n "$DETAIL_KEY" ]]; then
-  show_key_details "$SECRET_NAME" "$REGION" "$DETAIL_KEY"
-  exit 0
-fi
-
-# List keys if requested or ask if in interactive mode
-if $DO_LIST; then
-  list_keys "$SECRET_NAME" "$REGION"
-else
-echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
-  read -r LIST_KEYS
-if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
+  
+  # Show key details if requested
+  if [[ -n "$DETAIL_KEY" ]]; then
+    show_key_details "$SECRET_NAME" "$REGION" "$DETAIL_KEY"
+    exit 0
+  fi
+  
+  # List keys if requested or ask if in interactive mode
+  if $DO_LIST; then
     list_keys "$SECRET_NAME" "$REGION"
+  else
+    echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
+    read -r LIST_KEYS
+    if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
+      list_keys "$SECRET_NAME" "$REGION"
+    fi
   fi
-fi
+}
 
-# If in interactive mode and no specific actions were requested
-if [[ -z "$DETAIL_KEY" && "$DO_LIST" == false && "$CREATE_SECRET" == false && "$MANAGE_ENV" == false ]]; then
-  echo -n "Would you like to manage environment variables? (y/n): "
-  read -r MANAGE_ENV_CHOICE
-  if [[ "$MANAGE_ENV_CHOICE" =~ ^[Yy]$ ]]; then
-    manage_environment
-  fi
-fi
+# Run the main function
+main "$@"
 
 exit 0

@@ -59,6 +59,37 @@ manage_environment() {
   exit 0
 }
 
+# Function to check required SHH environment variables
+check_shh_environment() {
+  local missing_vars=()
+  
+  # Check for SHH_SECRETS
+  if [ -z "${SHH_SECRETS}" ]; then
+    missing_vars+=("SHH_SECRETS")
+  fi
+  
+  # Check for region from any of the possible sources
+  if [ -z "${SHH_REGION}" ] && [ -z "${AWS_REGION}" ] && [ -z "${AWS_DEFAULT_REGION}" ]; then
+    missing_vars+=("SHH_REGION")
+  fi
+  
+  # If any required variables are missing
+  if [ ${#missing_vars[@]} -gt 0 ]; then
+    echo "Error: Required environment variable(s) not set: ${missing_vars[*]}" >&2
+    echo "Would you like to configure these variables now using shh-admin? (y/n): " >&2
+    read -r CONFIGURE
+    
+    if [[ "$CONFIGURE" =~ ^[Yy]$ ]]; then
+      echo "Launching shh-admin environment configuration..." >&2
+      "$SCRIPT_DIR/shh-admin" --env
+      exit 0
+    else
+      echo "Please run 'shh-env' or 'shh-admin --env' to configure your environment." >&2
+      exit 1
+    fi
+  fi
+}
+
 # Parse arguments
 DEBUG_MODE=false
 KEY_NAME=""
@@ -120,11 +151,7 @@ if [ -z "$USER_HOST" ]; then
 fi
 
 # Check for required environment variables
-if [ -z "${SHH_SECRETS}" ]; then
-  echo "Error: SHH_SECRETS environment variable not set." >&2
-  echo "Please run 'shh-env' to configure your environment." >&2
-  exit 1
-fi
+check_shh_environment
 
 # Set region from environment or command line
 if [ -z "$REGION" ]; then
