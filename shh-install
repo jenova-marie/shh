@@ -174,24 +174,26 @@ log_message() {
   # Echo to console if not silent
   echo "$log_entry"
   
-  # Append to log file, creating it if it doesn't exist
+  # Quietly handle log file operations without notification messages
+  
+  # Append to log file, creating it if it doesn't exist (without notifications)
   if [ ! -f "$LOG_FILE" ]; then
     if [ ! -w "$(dirname "$LOG_FILE")" ]; then
-      echo -e "${YELLOW}Sudo required:${NC} Creating log file at ${PINK}$LOG_FILE${NC} (requires system directory access)"
-      sudo touch "$LOG_FILE"
-      sudo chmod 644 "$LOG_FILE"
+      # Quietly use sudo without notifications
+      sudo touch "$LOG_FILE" 2>/dev/null
+      sudo chmod 644 "$LOG_FILE" 2>/dev/null
     else
-      touch "$LOG_FILE"
-      chmod 644 "$LOG_FILE"
+      touch "$LOG_FILE" 2>/dev/null
+      chmod 644 "$LOG_FILE" 2>/dev/null
     fi
   fi
   
-  # Write to log file
+  # Write to log file without notification messages
   if [ -w "$LOG_FILE" ]; then
-    echo "$log_entry" >> "$LOG_FILE"
+    echo "$log_entry" >> "$LOG_FILE" 2>/dev/null
   else
-    echo -e "${YELLOW}Sudo required:${NC} Writing to log file at ${PINK}$LOG_FILE${NC} (requires system file access)"
-    echo "$log_entry" | sudo tee -a "$LOG_FILE" >/dev/null
+    # Quietly use sudo without notifications
+    echo "$log_entry" | sudo tee -a "$LOG_FILE" >/dev/null 2>&1
   fi
 }
 
@@ -359,14 +361,14 @@ clone_repo() {
 create_install_directory() {
   if [ ! -d "$INSTALL_DIR" ]; then
     if [ ! -w "$(dirname "$INSTALL_DIR")" ]; then
-      log_message "Requesting sudo permissions to create $INSTALL_DIR (current user lacks write permission)"
-      echo -e "${YELLOW}Sudo required:${NC} Creating installation directory at ${PINK}$INSTALL_DIR${NC}"
-      if ! sudo mkdir -p "$INSTALL_DIR"; then
+      log_message "Creating installation directory $INSTALL_DIR"
+      # Quietly use sudo without notification
+      if ! sudo mkdir -p "$INSTALL_DIR" 2>/dev/null; then
         log_message "Error: Failed to create installation directory."
         exit 1
       fi
       # Change ownership to make it writable
-      sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR"
+      sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR" 2>/dev/null
       log_message "Created installation directory with sudo"
     else
       mkdir -p "$INSTALL_DIR"
