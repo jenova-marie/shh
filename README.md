@@ -232,7 +232,45 @@ You can seamlessly replace `ssh` with `shh` in your scripts, aliases, and workfl
 
 ### 🔑 **Secure Key Generation and Destruction**
 
-For maximum security, follow these best practices when creating and destroying SSH keys before storing them in AWS Secrets Manager:
+For maximum security, follow these best practices when creating and destroying SSH keys before storing them in AWS Secrets Manager.
+
+#### Using Built-in Key Generation
+
+Shh now includes built-in key generation capabilities, securely creating and uploading keys in a single step:
+
+```bash
+# Generate a key with interactive prompts
+shh-add --generate server_name
+
+# Non-interactive generation with defaults (ed25519, no passphrase)
+shh-add --generate server_name --auto
+
+# Generate a key directly in RAM (never touches disk)
+shh-add --generate server_name --ram-disk --auto
+
+# Generate and then securely shred the key files afterwards
+shh-add --generate server_name --shred --auto
+
+# Fully customized key generation
+shh-add --generate --type rsa --bits 4096 --rounds 100 \
+        --comment "production server $(date +%Y-%m-%d)" \
+        --path ~/temp_keys/prod_key server_name
+```
+
+Key generation options:
+- `--generate`: Activates key generation mode
+- `--type TYPE`: Specifies key type (ed25519, rsa, ecdsa, dsa)
+- `--bits BITS`: Sets key size in bits (RSA only, default: 4096)
+- `--rounds N`: Sets KDF rounds for security (default: 100)
+- `--comment TEXT`: Adds a descriptive comment to the key
+- `--path PATH`: Specifies where to save the generated key
+- `--auto`: Non-interactive mode, uses defaults for all prompts
+- `--shred`: Securely deletes key files after uploading
+- `--ram-disk`: Creates keys in RAM for zero disk persistence
+
+#### Manual Key Generation
+
+If you prefer to generate keys manually:
 
 ```bash
 # Generate a strong, modern Ed25519 key (recommended)
@@ -286,6 +324,7 @@ These practices ensure:
 Here's how to eliminate local SSH keys from your system while maintaining secure access:
 
 ```bash
+# Traditional method (multiple steps):
 # Step 1: Generate a new SSH key (you can use any name/path)
 ssh-keygen -t ed25519 -f ~/temp_key
 
@@ -294,6 +333,13 @@ shh-add ~/temp_key server_name --pub
 
 # Step 3: Securely shred the local key files
 shred -u ~/temp_key ~/temp_key.pub
+
+# NEW: Simplified one-step method with built-in generation:
+# Generate, upload, and automatically shred in one command
+shh-add --generate server_name --auto --shred
+
+# For maximum security, generate directly in RAM
+shh-add --generate server_name --auto --ram-disk
 
 # Step 4: Connect to your server anytime with NO LOCAL KEY
 shh user@hostname -i server_name
@@ -330,6 +376,18 @@ shh-add ~/.ssh/mykey_ed25519 --no-ssh-add
 
 # Enable verbose debug output
 shh-add ~/.ssh/mykey_ed25519 --debug
+
+# Generate a new key and upload it in one step (with prompts)
+shh-add --generate myserver_key
+
+# Generate a key non-interactively and automatically shred it
+shh-add --generate myserver_key --auto --shred
+
+# Generate a key directly in RAM (never touches disk)
+shh-add --generate myserver_key --ram-disk
+
+# Generate a custom RSA key with options
+shh-add --generate --type rsa --bits 4096 --comment "production key" myserver_key
 ```
 
 #### Key Metadata Features

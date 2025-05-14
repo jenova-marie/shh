@@ -3,42 +3,89 @@
 # Exit on errors
 set -e
 
+# ANSI color codes for pretty output
+PINK="\033[38;5;206m"     # Hot pink for primary headings
+GREEN="\033[38;5;46m"     # Bright green for success messages
+YELLOW="\033[38;5;220m"   # Yellow for warnings and important info
+BLUE="\033[38;5;39m"      # Blue for option categories
+CYAN="\033[38;5;87m"      # Cyan for options
+WHITE="\033[97m"          # White for normal text
+ORANGE="\033[38;5;208m"   # Orange for parameter names
+GRAY="\033[38;5;246m"     # Gray for descriptions
+BOLD="\033[1m"            # Bold text
+UNDERLINE="\033[4m"       # Underlined text
+RESET="\033[0m"           # Reset all formatting
+
 # Region priority: Command line > SHH_REGION > AWS_REGION > AWS_DEFAULT_REGION > default
 DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
 DEFAULT_SECRET_NAME=${SHH_SECRETS:-"testing-secrets"}
 DEBUG_MODE=false
 ADD_TO_AGENT=true  # Default to adding key to SSH agent
 UPLOAD_PUB=true    # Default to uploading public key
+GENERATE_KEY=false # Default to not generating a key
+AUTO_MODE=false    # Default to interactive mode
+KEY_TYPE="ed25519" # Default key type
+KEY_BITS=4096      # Default bits for RSA keys
+KEY_ROUNDS=100     # Default KDF rounds
+SHRED_KEY=false    # Default to not shredding the key
+TEMP_DIR=""        # Will be set later if needed
 
 # Function to display usage
 usage() {
-  echo "Usage: $(basename "$0") <file-path> [property-name] [region] [options]"
+  echo -e "${PINK}${BOLD}╔════════════════════════════════════════════════════════════╗${RESET}"
+  echo -e "${PINK}${BOLD}║                 Shh SSH Key Manager                        ║${RESET}"
+  echo -e "${PINK}${BOLD}╚════════════════════════════════════════════════════════════╝${RESET}"
   echo ""
-  echo "Arguments:"
-  echo "  file-path      Path to the SSH key file"
-  echo "  property-name  Name to store the key as (defaults to filename)"
-  echo "  region         AWS region (defaults to $DEFAULT_REGION)"
+  echo -e "${UNDERLINE}${BOLD}USAGE:${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ${CYAN}[options] ${ORANGE}<file-path> ${ORANGE}[property-name] ${ORANGE}[region]${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ${CYAN}--generate ${CYAN}[options] ${ORANGE}[property-name] ${ORANGE}[region]${RESET}"
   echo ""
-  echo "Options:"
-  echo "  --no-pub       Don't upload the public key (.pub) alongside the private key"
-  echo "  --only         Only upload the specified file, skip public key and fingerprint"
-  echo "  --debug        Enable verbose debugging output"
-  echo "  --no-ssh-add   Don't add the key to the SSH agent"
-  echo "  --env          Manage environment variables with shh-env"
-  echo "  --help         Display this help message"
+  echo -e "${UNDERLINE}${BOLD}ARGUMENTS:${RESET}"
+  echo -e "  ${ORANGE}file-path${RESET}      ${WHITE}Path to the SSH key file (not needed with --generate)${RESET}"
+  echo -e "  ${ORANGE}property-name${RESET}  ${WHITE}Name to store the key as (defaults to filename or hostname with generate)${RESET}"
+  echo -e "  ${ORANGE}region${RESET}         ${WHITE}AWS region (defaults to ${RESET}${YELLOW}$DEFAULT_REGION${RESET}${WHITE})${RESET}"
   echo ""
-  echo "Environment variables (in order of precedence):"
-  echo "  SHH_REGION           Preferred AWS region"
-  echo "  AWS_REGION           Alternative AWS region"
-  echo "  AWS_DEFAULT_REGION   Default AWS region"
-  echo "  SHH_SECRETS          AWS Secrets Manager secret name"
+  echo -e "${BLUE}${BOLD}KEY GENERATION OPTIONS:${RESET}"
+  echo -e "  ${CYAN}--generate${RESET}     ${WHITE}Generate a new SSH key instead of uploading an existing one${RESET}"
+  echo -e "  ${CYAN}--type ${ORANGE}TYPE${RESET}    ${WHITE}Key type: ${GREEN}ed25519${RESET} (default), ${GREEN}rsa${RESET}, ${GREEN}ecdsa${RESET}, ${GREEN}dsa${RESET}${RESET}"
+  echo -e "  ${CYAN}--bits ${ORANGE}BITS${RESET}    ${WHITE}Key size in bits (for RSA keys, default: ${RESET}${YELLOW}4096${RESET}${WHITE})${RESET}"
+  echo -e "  ${CYAN}--rounds ${ORANGE}N${RESET}     ${WHITE}KDF rounds for key generation (default: ${RESET}${YELLOW}100${RESET}${WHITE})${RESET}"
+  echo -e "  ${CYAN}--comment ${ORANGE}TXT${RESET}  ${WHITE}Key comment (default: ${RESET}${YELLOW}username@hostname${RESET}${WHITE})${RESET}"
+  echo -e "  ${CYAN}--path ${ORANGE}PATH${RESET}    ${WHITE}Path to save generated key (default: temporary location)${RESET}"
+  echo -e "  ${CYAN}--auto${RESET}         ${WHITE}Non-interactive mode, use defaults for all prompts${RESET}"
+  echo -e "  ${CYAN}--shred${RESET}        ${WHITE}Securely delete the key files after uploading${RESET}"
+  echo -e "  ${CYAN}--ram-disk${RESET}     ${WHITE}Create keys in RAM disk for zero disk persistence${RESET}"
+  echo ""
+  echo -e "${BLUE}${BOLD}UPLOAD OPTIONS:${RESET}"
+  echo -e "  ${CYAN}--no-pub${RESET}       ${WHITE}Don't upload the public key (.pub) alongside the private key${RESET}"
+  echo -e "  ${CYAN}--only${RESET}         ${WHITE}Only upload the specified file, skip public key and fingerprint${RESET}"
+  echo -e "  ${CYAN}--debug${RESET}        ${WHITE}Enable verbose debugging output${RESET}"
+  echo -e "  ${CYAN}--no-ssh-add${RESET}   ${WHITE}Don't add the key to the SSH agent${RESET}"
+  echo -e "  ${CYAN}--env${RESET}          ${WHITE}Manage environment variables with shh-env${RESET}"
+  echo -e "  ${CYAN}--help${RESET}         ${WHITE}Display this help message${RESET}"
+  echo ""
+  echo -e "${UNDERLINE}${BOLD}ENVIRONMENT VARIABLES:${RESET} ${GRAY}(in order of precedence)${RESET}"
+  echo -e "  ${ORANGE}SHH_REGION${RESET}           ${WHITE}Preferred AWS region${RESET}"
+  echo -e "  ${ORANGE}AWS_REGION${RESET}           ${WHITE}Alternative AWS region${RESET}"
+  echo -e "  ${ORANGE}AWS_DEFAULT_REGION${RESET}   ${WHITE}Default AWS region${RESET}"
+  echo -e "  ${ORANGE}SHH_SECRETS${RESET}          ${WHITE}AWS Secrets Manager secret name${RESET}"
+  echo ""
+  echo -e "${YELLOW}${BOLD}EXAMPLES:${RESET}"
+  echo -e "  ${GRAY}# Upload an existing key${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ~/.ssh/id_ed25519 myserver us-west-2${RESET}"
+  echo -e ""
+  echo -e "  ${GRAY}# Generate a new key and upload it${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") --generate myserver --auto${RESET}"
+  echo -e ""
+  echo -e "  ${GRAY}# Generate a key in RAM and securely shred it${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") --generate --ram-disk --shred myserver${RESET}"
   exit 1
 }
 
 # Function for debug logging
 debug_log() {
   if $DEBUG_MODE; then
-    echo "[DEBUG] $1"
+    echo -e "${GRAY}[DEBUG] $1${RESET}"
   fi
 }
 
@@ -51,12 +98,117 @@ check_dependencies() {
     required_commands="$required_commands ssh-add ssh-agent grep"
   fi
   
+  # Add shred if we're using that option
+  if [ "$SHRED_KEY" = true ]; then
+    required_commands="$required_commands shred"
+  fi
+  
   for cmd in $required_commands; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
-      echo "Error: Required command '$cmd' not found. Please install it." >&2
+      echo -e "${YELLOW}${BOLD}Error:${RESET} Required command '${CYAN}$cmd${RESET}' not found."
+      case "$cmd" in
+        aws)
+          echo -e "  ${WHITE}Please install the AWS CLI: ${CYAN}https://aws.amazon.com/cli/${RESET}"
+          ;;
+        jq)
+          echo -e "  ${WHITE}Please install jq: '${CYAN}apt-get install jq${RESET}' or '${CYAN}brew install jq${RESET}'"
+          ;;
+        ssh-keygen|ssh-add|ssh-agent)
+          echo -e "  ${WHITE}Please install OpenSSH: '${CYAN}apt-get install openssh-client${RESET}' or '${CYAN}brew install openssh${RESET}'"
+          ;;
+        shred)
+          echo -e "  ${WHITE}Please install coreutils: '${CYAN}apt-get install coreutils${RESET}' or '${CYAN}brew install coreutils${RESET}'"
+          ;;
+        *)
+          echo -e "  ${WHITE}Please install the required dependency.${RESET}"
+          ;;
+      esac
       exit 1
     fi
   done
+}
+
+# Function to cleanup temp files
+cleanup() {
+  if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+    debug_log "Cleaning up temporary directory: $TEMP_DIR"
+    if [ "$SHRED_KEY" = true ]; then
+      # Find all files in the temp dir and shred them
+      find "$TEMP_DIR" -type f -exec shred -uz {} \;
+    fi
+    rm -rf "$TEMP_DIR"
+  fi
+}
+
+# Set trap to cleanup on exit
+trap cleanup EXIT INT TERM
+
+# Generate SSH key function
+generate_ssh_key() {
+  local key_path="$1"
+  local key_type="$2"
+  local key_bits="$3"
+  local key_rounds="$4"
+  local key_comment="$5"
+
+  debug_log "Generating $key_type key with $key_rounds rounds and comment: $key_comment"
+  
+  # Create required flags based on key type
+  local key_opts=()
+  key_opts+=("-t" "$key_type")
+  # Only RSA keys use bits parameter
+  if [ "$key_type" = "rsa" ]; then
+    key_opts+=("-b" "$key_bits")
+  fi
+  key_opts+=("-a" "$key_rounds")
+  key_opts+=("-f" "$key_path")
+  key_opts+=("-C" "$key_comment")
+  
+  echo -e "${BLUE}${BOLD}Generating new SSH key:${RESET} ${WHITE}$key_path${RESET} (type: ${CYAN}$key_type${RESET})"
+  
+  # Generate key either with or without interaction based on AUTO_MODE
+  if [ "$AUTO_MODE" = true ]; then
+    # Auto-mode: create key with empty passphrase
+    ssh-keygen "${key_opts[@]}" -N "" -q
+  else
+    # Interactive mode: let the user set a passphrase
+    ssh-keygen "${key_opts[@]}"
+  fi
+  
+  echo -e "${GREEN}✓ SSH key generated successfully.${RESET}"
+  return 0
+}
+
+# Function to get metadata about the key
+get_key_metadata() {
+  local key_path="$1"
+  
+  # Verify the key exists
+  if [ ! -f "$key_path" ]; then
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Key file not found: ${CYAN}$key_path${RESET}"
+    return 1
+  fi
+  
+  # Get the key type, size, and fingerprint
+  local key_type key_size key_fp
+  if [ -f "${key_path}.pub" ]; then
+    # Use the public key if available
+    key_type=$(ssh-keygen -l -f "${key_path}.pub" 2>/dev/null | awk '{print $3}' || echo "unknown")
+    key_size=$(ssh-keygen -l -f "${key_path}.pub" 2>/dev/null | awk '{print $1}' || echo "unknown")
+    key_fp=$(ssh-keygen -l -f "${key_path}.pub" 2>/dev/null | awk '{print $2}' || echo "")
+  else
+    # Try using the private key directly
+    key_type=$(ssh-keygen -l -f "$key_path" 2>/dev/null | awk '{print $3}' || echo "unknown")
+    key_size=$(ssh-keygen -l -f "$key_path" 2>/dev/null | awk '{print $1}' || echo "unknown")
+    key_fp=$(ssh-keygen -l -f "$key_path" 2>/dev/null | awk '{print $2}' || echo "")
+  fi
+  
+  # Return the data
+  echo "type:$key_type"
+  echo "size:$key_size"
+  echo "fingerprint:$key_fp"
+  
+  return 0
 }
 
 # Function to check AWS credentials
@@ -66,16 +218,16 @@ check_aws_credentials() {
   
   if $DEBUG_MODE; then
     # Show the actual AWS command and output for debugging
-    echo "Running: aws sts get-caller-identity --region \"$region\""
+    echo -e "${GRAY}Running: aws sts get-caller-identity --region \"$region\"${RESET}"
     if ! aws sts get-caller-identity --region "$region"; then
-      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
+      echo -e "${YELLOW}${BOLD}Error:${RESET} AWS credentials not found or invalid. Run '${CYAN}aws configure${RESET}' to set them up." >&2
       return 1
     fi
   else
     # Silent mode for normal operation
     if ! aws sts get-caller-identity --region "$region" >/dev/null 2>&1; then
-      echo "Error: AWS credentials not found or invalid. Run 'aws configure' to set them up." >&2
-      echo "Try running with --debug for more information." >&2
+      echo -e "${YELLOW}${BOLD}Error:${RESET} AWS credentials not found or invalid. Run '${CYAN}aws configure${RESET}' to set them up." >&2
+      echo -e "Try running with ${CYAN}--debug${RESET} for more information." >&2
       return 1
     fi
   fi
@@ -89,11 +241,11 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Function to manage environment
 manage_environment() {
-  echo "Managing SHH environment variables..."
+  echo -e "${BLUE}${BOLD}Managing SHH environment variables...${RESET}"
   
   # Check if shh-env exists and is executable
   if [ ! -x "$SCRIPT_DIR/shh-env" ]; then
-    echo "Error: shh-env script not found or not executable."
+    echo -e "${YELLOW}${BOLD}Error:${RESET} shh-env script not found or not executable."
     return 1
   fi
   
@@ -124,16 +276,16 @@ check_shh_environment() {
   
   # If any required variables are missing
   if [ ${#missing_vars[@]} -gt 0 ]; then
-    echo "Error: Required environment variable(s) not set: ${missing_vars[*]}" >&2
-    echo "Would you like to configure these variables now using shh-admin? (y/n): " >&2
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Required environment variable(s) not set: ${ORANGE}${missing_vars[*]}${RESET}" >&2
+    echo -e "Would you like to configure these variables now using shh-admin? (y/n): " >&2
     read -r CONFIGURE
     
     if [[ "$CONFIGURE" =~ ^[Yy]$ ]]; then
-      echo "Launching shh-admin environment configuration..." >&2
+      echo -e "${BLUE}Launching shh-admin environment configuration...${RESET}" >&2
       "$SCRIPT_DIR/shh-admin" --env
       exit 0
     else
-      echo "Please run 'shh-env' or 'shh-admin --env' to configure your environment." >&2
+      echo -e "Please run '${CYAN}shh-env${RESET}' or '${CYAN}shh-admin --env${RESET}' to configure your environment." >&2
       exit 1
     fi
   fi
@@ -152,6 +304,9 @@ for arg in "$@"; do
   if [ "$arg" = "--debug" ]; then
     DEBUG_MODE=true
   fi
+  if [ "$arg" = "--generate" ]; then
+    GENERATE_KEY=true
+  fi
   if [ "$arg" = "--no-ssh-add" ]; then
     ADD_TO_AGENT=false
   fi
@@ -160,21 +315,104 @@ for arg in "$@"; do
     shift # Remove the script name from args
     manage_environment "$@"
     exit $?
-fi
+  fi
 done
 
 # Parameters
+FILE_PATH=""
+if [ "$GENERATE_KEY" = false ] && [ $# -gt 0 ]; then
 FILE_PATH="$1"
-shift
+  shift
+fi
 
 # Check for optional arguments
 PROPERTY_NAME=""
 REGION=""
 UPLOAD_FP=true
 ONLY_MODE=false
+KEY_COMMENT="$(whoami)@$(hostname)"
+KEY_PATH=""
+USE_RAM_DISK=false
 
+# Parse all arguments
 while [ $# -gt 0 ]; do
   case "$1" in
+    --generate)
+      GENERATE_KEY=true
+      shift
+      ;;
+    --type)
+      if [ $# -lt 2 ]; then
+        echo "Error: --type requires an argument"
+        usage
+      fi
+      KEY_TYPE="$2"
+      # Validate key type
+      case "$KEY_TYPE" in
+        ed25519|rsa|ecdsa|dsa)
+          # Valid key type
+          ;;
+        *)
+          echo "Error: Invalid key type. Must be one of: ed25519, rsa, ecdsa, dsa"
+          exit 1
+          ;;
+      esac
+      shift 2
+      ;;
+    --bits)
+      if [ $# -lt 2 ]; then
+        echo "Error: --bits requires an argument"
+        usage
+      fi
+      KEY_BITS="$2"
+      # Validate bits is a number
+      if ! [[ "$KEY_BITS" =~ ^[0-9]+$ ]]; then
+        echo "Error: --bits must be a number"
+        exit 1
+      fi
+      shift 2
+      ;;
+    --rounds)
+      if [ $# -lt 2 ]; then
+        echo "Error: --rounds requires an argument"
+        usage
+      fi
+      KEY_ROUNDS="$2"
+      # Validate rounds is a number
+      if ! [[ "$KEY_ROUNDS" =~ ^[0-9]+$ ]]; then
+        echo "Error: --rounds must be a number"
+        exit 1
+      fi
+      shift 2
+      ;;
+    --comment)
+      if [ $# -lt 2 ]; then
+        echo "Error: --comment requires an argument"
+        usage
+      fi
+      KEY_COMMENT="$2"
+      shift 2
+      ;;
+    --path)
+      if [ $# -lt 2 ]; then
+        echo "Error: --path requires an argument"
+        usage
+      fi
+      KEY_PATH="$2"
+      shift 2
+      ;;
+    --auto)
+      AUTO_MODE=true
+      shift
+      ;;
+    --shred)
+      SHRED_KEY=true
+      shift
+      ;;
+    --ram-disk)
+      USE_RAM_DISK=true
+      shift
+      ;;
     --no-pub)
       UPLOAD_PUB=false
       shift
@@ -211,6 +449,55 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Check dependencies
+check_dependencies
+
+# If generating a key
+if [ "$GENERATE_KEY" = true ]; then
+  # Create a path for the key if none specified
+  if [ -z "$KEY_PATH" ]; then
+    if [ "$USE_RAM_DISK" = true ]; then
+      # Create a directory in RAM disk
+      if [ -d "/dev/shm" ]; then
+        TEMP_DIR=$(mktemp -d /dev/shm/shh-XXXXXXXXXX)
+      else
+        echo -e "${YELLOW}${BOLD}Warning:${RESET} RAM disk not available at ${CYAN}/dev/shm${RESET}"
+        echo -e "${WHITE}Using regular temporary directory instead.${RESET}"
+        TEMP_DIR=$(mktemp -d)
+      fi
+    else
+      # Create a regular temporary directory
+      TEMP_DIR=$(mktemp -d)
+    fi
+    KEY_PATH="$TEMP_DIR/key"
+    debug_log "Using temporary key path: $KEY_PATH"
+  fi
+  
+  # Auto-generate property name if not specified
+  if [ -z "$PROPERTY_NAME" ]; then
+    # Generate a name based on hostname and key type
+    PROPERTY_NAME="$(hostname | tr -d '.')_$KEY_TYPE"
+    debug_log "Auto-generated property name: $PROPERTY_NAME"
+  fi
+  
+  # Generate the key
+  generate_ssh_key "$KEY_PATH" "$KEY_TYPE" "$KEY_BITS" "$KEY_ROUNDS" "$KEY_COMMENT"
+  
+  # Set the file path to the generated key
+  FILE_PATH="$KEY_PATH"
+else
+  # Not generating a key - validate FILE_PATH exists
+  if [ -z "$FILE_PATH" ]; then
+    echo -e "${YELLOW}${BOLD}Error:${RESET} No file path provided."
+    usage
+  fi
+  
+if [ ! -f "$FILE_PATH" ]; then
+    echo -e "${YELLOW}${BOLD}Error:${RESET} File '${CYAN}$FILE_PATH${RESET}' not found!"
+    exit 1
+  fi
+fi
+
 # Set defaults if not provided
 PROPERTY_NAME="${PROPERTY_NAME:-$(basename "$FILE_PATH")}"
 REGION="${REGION:-$DEFAULT_REGION}"
@@ -224,18 +511,9 @@ export SHH_SECRETS="$SECRET_NAME"
 export SHH_REGION="$REGION"
 export AWS_DEFAULT_REGION="$REGION"
 
-# Check dependencies
-check_dependencies
-
-# Ensure the file exists
-if [ ! -f "$FILE_PATH" ]; then
-  echo "Error: File '$FILE_PATH' not found!"
-  exit 1
-fi
-
 # SECURITY CHECK: Verify user has access to the key by trying to add it to ssh-agent first
 if [ "$ADD_TO_AGENT" = true ]; then
-  echo "Verifying access to private key..."
+  echo -e "${BLUE}${BOLD}Verifying access to private key...${RESET}"
   
   # Start ssh-agent if not running
   if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
@@ -256,30 +534,30 @@ if [ "$ADD_TO_AGENT" = true ]; then
     # Check if the key is already in ssh-agent using fingerprint
     if [ -n "$SSH_KEY_FP" ] && ssh-add -l 2>/dev/null | grep -q "$SSH_KEY_FP"; then
       debug_log "Key is already loaded in ssh-agent."
-      echo "Key is already loaded in SSH agent."
+      echo -e "${GREEN}✓ Key is already loaded in SSH agent.${RESET}"
     else
       # Try to add the key to ssh-agent to verify user has access
       debug_log "Attempting to add key to ssh-agent..."
       
       if ! ssh-add "$FILE_PATH" 2>/dev/null; then
-        echo "Error: Failed to add key to SSH agent. You may not have permission to use this key." >&2
-        echo "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
+        echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to add key to SSH agent. You may not have permission to use this key." >&2
+        echo -e "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
         exit 1
       fi
       
-      echo "Successfully verified access to private key."
+      echo -e "${GREEN}✓ Successfully verified access to private key.${RESET}"
     fi
   else
     # No public key to check fingerprint, try to add directly
     debug_log "No public key found, attempting to add private key directly..."
     
     if ! ssh-add "$FILE_PATH" 2>/dev/null; then
-      echo "Error: Failed to add key to SSH agent. You may not have permission to use this key." >&2
-      echo "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
+      echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to add key to SSH agent. You may not have permission to use this key." >&2
+      echo -e "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
       exit 1
     fi
     
-    echo "Successfully verified access to private key."
+    echo -e "${GREEN}✓ Successfully verified access to private key.${RESET}"
   fi
 fi
 
@@ -288,22 +566,22 @@ if ! check_aws_credentials "$REGION"; then
   exit 1
 fi
 
-echo "Using AWS Secret: $SECRET_NAME in region: $REGION"
+echo -e "${BLUE}${BOLD}Using AWS Secret:${RESET} ${CYAN}$SECRET_NAME${RESET} in region: ${CYAN}$REGION${RESET}"
 
 # Retrieve the existing secret JSON from AWS Secrets Manager
 debug_log "Attempting to get existing secret value..."
 if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
-  echo "Secret '$SECRET_NAME' not found or access denied. Initializing new secret..."
+  echo -e "${YELLOW}Secret '$SECRET_NAME' not found or access denied. Initializing new secret...${RESET}"
   
   # Check if the secret exists but we don't have permission
   debug_log "Checking if secret exists but we lack permissions..."
   if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
-    echo "Error: Secret exists but you don't have permission to read it."
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Secret exists but you don't have permission to read it."
     exit 1
   fi
   
   # Try to create the secret using shh-admin
-  echo "Attempting to create secret '$SECRET_NAME' using shh-admin..."
+  echo -e "${BLUE}Attempting to create secret '${CYAN}$SECRET_NAME${BLUE}' using shh-admin...${RESET}"
   
   # Prepare debug flag
   admin_debug_flag=""
@@ -313,13 +591,13 @@ if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_
   
   # Call shh-admin to create the secret
   if ! "$SCRIPT_DIR/shh-admin" --secret "$SECRET_NAME" --region "$REGION" --create $admin_debug_flag; then
-    echo "Error: Failed to create secret '$SECRET_NAME' using shh-admin."
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to create secret '${CYAN}$SECRET_NAME${RESET}' using shh-admin."
     exit 1
   fi
   
   # Now get the empty secret JSON
   if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
-    echo "Error: Failed to retrieve newly created secret '$SECRET_NAME'."
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to retrieve newly created secret '${CYAN}$SECRET_NAME${RESET}'."
     exit 1
   fi
   
@@ -333,9 +611,9 @@ debug_log "Encoded content length: ${#ENCODED_FILE_CONTENT} characters"
 
 # Check if the property already exists in the secret
 if echo "$EXISTING_SECRET" | jq -e --arg key "$PROPERTY_NAME" 'has($key)' >/dev/null; then
-  echo "Property '$PROPERTY_NAME' already exists in secret '$SECRET_NAME'. Overwriting..."
+  echo -e "${YELLOW}Property '${CYAN}$PROPERTY_NAME${YELLOW}' already exists in secret '${CYAN}$SECRET_NAME${YELLOW}'. Overwriting...${RESET}"
 else
-  echo "Adding new property '$PROPERTY_NAME' to secret '$SECRET_NAME'."
+  echo -e "${BLUE}Adding new property '${CYAN}$PROPERTY_NAME${BLUE}' to secret '${CYAN}$SECRET_NAME${BLUE}'.${RESET}"
 fi
 
 # Merge new property into existing JSON
@@ -346,18 +624,18 @@ UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg v
 if [ "$UPLOAD_PUB" = true ] && [ "$ONLY_MODE" = false ]; then
   PUB_FILE="$FILE_PATH.pub"
   if [ -f "$PUB_FILE" ]; then
-    echo "Adding public key..."
+    echo -e "${BLUE}Adding public key...${RESET}"
     debug_log "Reading public key from: $PUB_FILE"
     ENCODED_PUB_CONTENT=$(cat "$PUB_FILE")
     UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.pub" --arg value "$ENCODED_PUB_CONTENT" '. + {($key): $value}')
-    echo "Public key '$PROPERTY_NAME.pub' added to secret."
+    echo -e "${GREEN}✓ Public key '${CYAN}$PROPERTY_NAME.pub${GREEN}' added to secret.${RESET}"
   else
-    echo "Warning: Public key file '$PUB_FILE' not found. Skipping upload."
+    echo -e "${YELLOW}${BOLD}Warning:${RESET} Public key file '${CYAN}$PUB_FILE${RESET}' not found. Skipping upload."
   fi
 fi
 
 # Add or update metadata for the key
-echo "Adding key metadata..."
+echo -e "${BLUE}${BOLD}Adding key metadata...${RESET}"
 
 # Get current timestamp in ISO 8601 format
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -371,12 +649,12 @@ COMMENT=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | sed 's/^[^ ]* [^ ]* [^ ]* 
 SSH_KEY_FP=""
 if [ "$UPLOAD_FP" = true ] && [ "$ONLY_MODE" = false ]; then
   if [ -f "$FILE_PATH.pub" ]; then
-    echo "Calculating SSH key fingerprint..."
+    echo -e "${BLUE}Calculating SSH key fingerprint...${RESET}"
     debug_log "Running ssh-keygen to calculate fingerprint"
     SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
     debug_log "Fingerprint: $SSH_KEY_FP"
   else
-    echo "Warning: No public key file found for fingerprinting."
+    echo -e "${YELLOW}${BOLD}Warning:${RESET} No public key file found for fingerprinting."
   fi
 fi
 
@@ -464,7 +742,7 @@ debug_log "Generated metadata: $META_JSON_STRING"
 
 # Add metadata to secret as a STRING value
 UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$META_KEY" --arg value "$META_JSON_STRING" '. + {($key): $value}')
-echo "Metadata for '$PROPERTY_NAME' added to secret (version $VERSION)."
+echo -e "${GREEN}✓ Metadata for '${CYAN}$PROPERTY_NAME${GREEN}' added to secret (version ${YELLOW}$VERSION${GREEN}).${RESET}"
 
 # Check if we need to remove the old fingerprint property
 # This helps with migration from previous versions of the script
@@ -475,7 +753,7 @@ if echo "$UPDATED_SECRET" | jq -e --arg key "$FP_KEY" 'has($key)' >/dev/null; th
 fi
 
 # Store the updated JSON back in AWS Secrets Manager
-echo "Updating secret in AWS Secrets Manager..."
+echo -e "${BLUE}${BOLD}Updating secret in AWS Secrets Manager...${RESET}"
 
 # Create a temporary file for the secret JSON
 TMP_JSON_FILE=$(mktemp)
@@ -492,11 +770,11 @@ if $DEBUG_MODE; then
        --secret-string file://"$TMP_JSON_FILE" \
        $aws_debug_flag; then
     rm -f "$TMP_JSON_FILE"
-    echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
-    echo "Make sure you have the following IAM permissions for secret '$SECRET_NAME':"
-    echo "  - secretsmanager:GetSecretValue"
-    echo "  - secretsmanager:PutSecretValue"
-    echo "  - secretsmanager:UpdateSecret"
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to update secret '${CYAN}$SECRET_NAME${RESET}'. Check your AWS permissions."
+    echo -e "Make sure you have the following IAM permissions for secret '${CYAN}$SECRET_NAME${RESET}':"
+    echo -e "  - ${ORANGE}secretsmanager:GetSecretValue${RESET}"
+    echo -e "  - ${ORANGE}secretsmanager:PutSecretValue${RESET}"
+    echo -e "  - ${ORANGE}secretsmanager:UpdateSecret${RESET}"
     exit 1
   fi
 else
@@ -507,11 +785,11 @@ else
        --secret-string file://"$TMP_JSON_FILE" \
        > /dev/null 2>&1; then
     rm -f "$TMP_JSON_FILE"
-    echo "Error: Failed to update secret '$SECRET_NAME'. Check your AWS permissions."
-    echo "Make sure you have the following IAM permissions for secret '$SECRET_NAME':"
-    echo "  - secretsmanager:GetSecretValue"
-    echo "  - secretsmanager:PutSecretValue"
-    echo "  - secretsmanager:UpdateSecret"
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to update secret '${CYAN}$SECRET_NAME${RESET}'. Check your AWS permissions."
+    echo -e "Make sure you have the following IAM permissions for secret '${CYAN}$SECRET_NAME${RESET}':"
+    echo -e "  - ${ORANGE}secretsmanager:GetSecretValue${RESET}"
+    echo -e "  - ${ORANGE}secretsmanager:PutSecretValue${RESET}"
+    echo -e "  - ${ORANGE}secretsmanager:UpdateSecret${RESET}"
     exit 1
   fi
 fi
@@ -519,6 +797,25 @@ fi
 # Clean up the temporary file
 rm -f "$TMP_JSON_FILE"
 
-echo "Successfully updated secret '$SECRET_NAME' with new property '$PROPERTY_NAME'."
+echo -e "${GREEN}${BOLD}✓ Successfully updated secret '${CYAN}$SECRET_NAME${GREEN}' with new property '${CYAN}$PROPERTY_NAME${GREEN}'.${RESET}"
+
+# If we generated a key, provide information about it
+if [ "$GENERATE_KEY" = true ]; then
+  echo -e "${GREEN}${BOLD}✓ Successfully generated and uploaded key '${CYAN}$PROPERTY_NAME${GREEN}' (type: ${CYAN}$KEY_TYPE${GREEN})${RESET}"
+  
+  # If shredding was requested, notify the user
+  if [ "$SHRED_KEY" = true ]; then
+    echo -e "${YELLOW}${BOLD}→ Key files will be securely shredded upon script exit.${RESET}"
+  elif [ -n "$TEMP_DIR" ]; then
+    echo -e "${WHITE}Generated key located at: ${CYAN}$FILE_PATH${RESET}"
+    echo -e "${YELLOW}${BOLD}⚠️ Consider securely shredding these files when no longer needed:${RESET}"
+    echo -e "  ${CYAN}shred -uz $FILE_PATH $FILE_PATH.pub${RESET}"
+  fi
+  
+  # If using RAM disk, let user know
+  if [ "$USE_RAM_DISK" = true ]; then
+    echo -e "${BLUE}${BOLD}ℹ️ Key was generated in RAM disk and will not persist after reboot.${RESET}"
+  fi
+fi
 
 exit 0
