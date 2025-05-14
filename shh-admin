@@ -357,6 +357,8 @@ list_keys() {
   
   if [ -z "$keys" ]; then
     echo "(No SSH keys found)"
+    # Display instructions to add a key
+    display_add_key_instructions "$secret_name" "$region"
     return 0
   fi
   
@@ -388,6 +390,35 @@ list_keys() {
     
     printf "%-30s %-12s %-12s %-20s %s\n" "$key" "$key_type" "$key_size" "$created_date" "$rotation_date"
   done
+  
+  # Display instructions to add a key after listing
+  display_add_key_instructions "$secret_name" "$region"
+}
+
+# Function to display instructions for adding a key
+display_add_key_instructions() {
+  local secret_name="$1"
+  local region="$2"
+  
+  echo ""
+  echo "╔═════════════════════════════════════════════════════════════════╗"
+  echo "║                      💡 Next Steps                              ║"
+  echo "╚═════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "To add an SSH key to '$secret_name', you can:"
+  echo ""
+  echo "1. Generate a new SSH key and add it:"
+  echo "   $ shh-keygen --name your-key-name"
+  echo ""
+  echo "2. Import an existing SSH key:"
+  echo "   $ shh-import --name your-key-name --key-file ~/.ssh/id_rsa"
+  echo ""
+  echo "3. View details of a specific key:"
+  echo "   $ shh-admin --detail your-key-name"
+  echo ""
+  echo "For more options and detailed help:"
+  echo "   $ shh-keygen --help"
+  echo "   $ shh-import --help"
 }
 
 # Function to show key details
@@ -603,6 +634,9 @@ echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
     read -r LIST_KEYS
 if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
       list_keys "$SECRET_NAME" "$REGION"
+    else
+      # Display instructions anyway if the user chooses not to list keys
+      display_add_key_instructions "$SECRET_NAME" "$REGION"
     fi
 fi
 }
