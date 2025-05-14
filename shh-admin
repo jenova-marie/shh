@@ -502,7 +502,7 @@ update_shh() {
   echo "╚═════════════════════════════════════════════════════════════════╝"
   
   # URL for the latest installer
-  local install_url="https://raw.githubusercontent.com/cevoaustralia/shh/main/shh-install"
+  local install_url="https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install"
   
   echo "Downloading latest installer from:"
   echo "$install_url"
