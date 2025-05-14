@@ -24,21 +24,22 @@ Shh is an elegant command-line tool designed for **securely managing SSH keys an
 The easiest way to install Shh is using our installation script:
 
 ```bash
-# Install Shh with one command
+# Install Shh with one command - downloads AND executes installer script
 curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash
 ```
 
 This will:
-1. Download and install all Shh components
-2. Create symlinks in `/usr/local/bin`
-3. Set proper permissions
-4. Log all installation activities to `/var/log/shh.log`
+1. Download and execute the installer script directly
+2. Install all Shh components
+3. Create symlinks in `/usr/local/bin`
+4. Set proper permissions
+5. Log all installation activities to `/var/log/shh.log`
 
 ### Manual Review Before Installation
 If you'd like to review the installer before running it (recommended):
 
 ```bash
-# Download installation script
+# Download installation script ONLY (does NOT execute)
 curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install -o shh-install
 
 # Make it executable
@@ -52,7 +53,7 @@ chmod +x shh-install
 To remove Shh from your system:
 
 ```bash
-# Uninstall directly
+# Uninstall directly (downloads AND executes with uninstall option)
 curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s uninstall
 
 # Or if you have the script locally
