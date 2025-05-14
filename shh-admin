@@ -60,141 +60,30 @@ manage_environment() {
   echo "Managing SHH environment variables..."
   
   # Check if shh-env exists and is executable
-  if [ ! -x "$SCRIPT_DIR/shh-env" ]; then
-    echo "Error: shh-env script not found or not executable."
+  local shh_env_path="$SCRIPT_DIR/shh-env"
+  if [ ! -x "$shh_env_path" ]; then
+    echo "Error: shh-env script not found or not executable at '$shh_env_path'."
+    echo "Current SCRIPT_DIR is: $SCRIPT_DIR"
     return 1
   fi
   
-  # Check for missing required variables to highlight them
-  local missing_vars=()
-  if [ -z "${SHH_SECRETS}" ]; then
-    missing_vars+=("SHH_SECRETS")
+  # Run shh-env directly with the menu flag for consistent UI
+  # Always use explicit relative path from SCRIPT_DIR
+  "$SCRIPT_DIR/shh-env" --menu
+  
+  # Environment variables should now be set by shh-env, export them to current session
+  if [ -n "${SHH_REGION:-}" ]; then
+    export SHH_REGION
+    export AWS_DEFAULT_REGION="$SHH_REGION"
   fi
   
-  if [ -z "${SHH_REGION}" ] && [ -z "${AWS_REGION}" ] && [ -z "${AWS_DEFAULT_REGION}" ]; then
-    missing_vars+=("SHH_REGION")
+  if [ -n "${SHH_SECRETS:-}" ]; then
+    export SHH_SECRETS
   fi
   
-  # First display current environment
-  "$SCRIPT_DIR/shh-env" --display
-  
-  # If there are missing variables, highlight them
-  if [ ${#missing_vars[@]} -gt 0 ]; then
-    echo ""
-    echo "ATTENTION: The following required variables are not set: ${missing_vars[*]}"
-    echo "These must be configured for Shh to work properly."
+  if [ -n "${SHH_DEBUG:-}" ]; then
+    export SHH_DEBUG
   fi
-  
-  # Ask if user wants to modify environment
-  echo ""
-  echo "Would you like to:"
-  echo "1) Set a new environment variable"
-  echo "2) Reset all environment variables to defaults"
-  echo "3) Persist current environment to shell config"
-  echo "4) Return to main menu / continue"
-  echo ""
-  echo -n "Enter your choice [1]: "
-  read -r CHOICE
-  CHOICE=${CHOICE:-1}
-  
-  case "$CHOICE" in
-    1)
-      echo ""
-      echo "Available variables to set:"
-      
-      # Show missing variables first with highlighting
-      if [ ${#missing_vars[@]} -gt 0 ]; then
-        for var in "${missing_vars[@]}"; do
-          echo "- $var   (REQUIRED, currently not set)"
-        done
-      fi
-      
-      # Show other variables
-      echo "- SHH_REGION   (current region for AWS operations)"
-      echo "- SHH_SECRETS  (default secret name)"
-      echo "- SHH_DEBUG    (enable debug mode, true/false)"
-      echo ""
-      echo -n "Enter variable name to set: "
-      read -r VAR_NAME
-      
-      if [[ ! "$VAR_NAME" =~ ^SHH_ ]]; then
-        echo "Error: Only SHH_ prefixed variables can be set."
-        return 1
-      fi
-      
-      echo -n "Enter value for $VAR_NAME: "
-      read -r VAR_VALUE
-      
-      "$SCRIPT_DIR/shh-env" --set "$VAR_NAME=$VAR_VALUE"
-      
-      # Export in current session too
-      export "$VAR_NAME"="$VAR_VALUE"
-      
-      # If there are still missing required variables, recurse to continue setup
-      export SHH_SECRETS="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
-      export SHH_REGION="${SHH_REGION:-$DEFAULT_REGION}"
-      export AWS_DEFAULT_REGION="${SHH_REGION:-$DEFAULT_REGION}"
-      
-      # Check if we need to continue with configuration
-      missing_vars=()
-      if [ -z "${SHH_SECRETS}" ]; then
-        missing_vars+=("SHH_SECRETS")
-      fi
-      
-      if [ -z "${SHH_REGION}" ] && [ -z "${AWS_REGION}" ] && [ -z "${AWS_DEFAULT_REGION}" ]; then
-        missing_vars+=("SHH_REGION")
-      fi
-      
-      if [ ${#missing_vars[@]} -gt 0 ]; then
-        echo ""
-        echo "Some required variables are still not set. Let's continue configuration."
-        manage_environment
-        return $?
-      fi
-      
-      # Ask if user wants to persist
-      echo -n "Would you like to persist this change to your shell config? (y/n) [y]: "
-      read -r PERSIST
-      PERSIST=${PERSIST:-y}
-      
-      if [[ "$PERSIST" =~ ^[Yy]$ ]]; then
-        "$SCRIPT_DIR/shh-env" --persist
-      fi
-      ;;
-    2)
-      "$SCRIPT_DIR/shh-env" --reset
-      
-      # Export in current session too
-      export SHH_REGION="$DEFAULT_REGION"
-      export SHH_SECRETS="$DEFAULT_SECRET_NAME"
-      export SHH_DEBUG="false"
-      export AWS_DEFAULT_REGION="$DEFAULT_REGION"
-      
-      # Ask if user wants to persist
-      echo -n "Would you like to persist these defaults to your shell config? (y/n) [y]: "
-      read -r PERSIST
-      PERSIST=${PERSIST:-y}
-      
-      if [[ "$PERSIST" =~ ^[Yy]$ ]]; then
-        "$SCRIPT_DIR/shh-env" --persist
-      fi
-      ;;
-    3)
-      "$SCRIPT_DIR/shh-env" --persist
-      ;;
-    4)
-      if [ ${#missing_vars[@]} -gt 0 ]; then
-        echo "Warning: Some required variables are still not set. Shh may not work correctly."
-        echo "You can run 'shh-env' at any time to complete configuration."
-      else
-        echo "Environment configuration is complete."
-      fi
-      ;;
-    *)
-      echo "Invalid choice. Please try again."
-      manage_environment
-      ;;
-  esac
   
   return 0
 }
@@ -671,7 +560,7 @@ main() {
   
   # Check if secret exists, create if needed
   if check_secret "$SECRET_NAME" "$REGION"; then
-    echo "Secret '$SECRET_NAME' exists."
+  echo "Secret '$SECRET_NAME' exists."
     
     # Check IAM permissions
     check_iam_permissions "$SECRET_NAME" "$REGION"
@@ -683,23 +572,23 @@ main() {
       else
         exit 1
       fi
-    else
+else
       # Interactive mode
-      echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
+  echo -n "Secret '$SECRET_NAME' does not exist. Create it? (y/n): "
       read -r CONFIRM
-      if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+  if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
         if create_secret "$SECRET_NAME" "$REGION"; then
           check_iam_permissions "$SECRET_NAME" "$REGION"
         else
           exit 1
         fi
-      else
-        echo "Secret creation canceled."
+  else
+    echo "Secret creation canceled."
         exit 1
       fi
-    fi
   fi
-  
+fi
+
   # Show key details if requested
   if [[ -n "$DETAIL_KEY" ]]; then
     show_key_details "$SECRET_NAME" "$REGION" "$DETAIL_KEY"
@@ -710,12 +599,12 @@ main() {
   if $DO_LIST; then
     list_keys "$SECRET_NAME" "$REGION"
   else
-    echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
+echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
     read -r LIST_KEYS
-    if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
+if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
       list_keys "$SECRET_NAME" "$REGION"
     fi
-  fi
+fi
 }
 
 # Run the main function

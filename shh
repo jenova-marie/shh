@@ -56,7 +56,27 @@ manage_environment() {
   
   # Run shh-env with interactive menu
   "$SCRIPT_DIR/shh-env" --menu "$@"
-  exit 0
+  
+  # Environment variables should now be set by shh-env, export them to current session
+  if [ -n "${SHH_REGION:-}" ]; then
+    export SHH_REGION
+    export AWS_DEFAULT_REGION="$SHH_REGION"
+  fi
+  
+  if [ -n "${SHH_SECRETS:-}" ]; then
+    export SHH_SECRETS
+  fi
+  
+  if [ -n "${SHH_DEBUG:-}" ]; then
+    export SHH_DEBUG
+  fi
+  
+  # If this was called with --env from command line, exit after environment configuration
+  if [[ "$1" == "--env" ]]; then
+    exit 0
+  fi
+  
+  return 0
 }
 
 # Function to check required SHH environment variables
@@ -119,7 +139,7 @@ while [[ $# -gt 0 ]]; do
     --env)
       # Pass remaining arguments to environment manager
       shift
-      manage_environment "$@"
+      manage_environment "--env" "$@"
       ;;
     --help|-h)
       usage
@@ -186,7 +206,7 @@ check_dependencies
 if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
   debug_log "Starting ssh-agent..."
   if [ "$DEBUG_MODE" = true ]; then
-    eval "$(ssh-agent -s)"
+  eval "$(ssh-agent -s)"
   else
     eval "$(ssh-agent -s)" >/dev/null
   fi

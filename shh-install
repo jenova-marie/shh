@@ -5,6 +5,9 @@
 
 set -e
 
+# Get the directory of the current script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 # Define colors for output
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
@@ -58,7 +61,7 @@ print_banner() {
 
 # Explain sudo usage and permissions
 explain_sudo_usage() {
-  echo -e "${YELLOW}=== Important Information About Permissions ===${NC}"
+  echo -e "${RED}=== Important Information About Permissions ===${NC}"
   echo -e "This script may require administrator privileges (sudo) to:"
   echo -e "  1. Create the installation directory: ${BLUE}$INSTALL_DIR${NC}"
   echo -e "  2. Create symlinks in: ${BLUE}$BIN_DIR${NC}"
@@ -400,7 +403,7 @@ remove_install_directory() {
 # Function to uninstall the application
 uninstall() {
   # Explain sudo usage for uninstallation
-  echo -e "${YELLOW}=== Important Information About Permissions ===${NC}"
+  echo -e "${RED}=== Important Information About Permissions ===${NC}"
   echo -e "This uninstallation process may require administrator privileges (sudo) to:"
   echo -e "  1. Remove symlinks from: ${BLUE}$BIN_DIR${NC}"
   echo -e "  2. Remove the installation directory: ${BLUE}$INSTALL_DIR${NC}"
@@ -515,6 +518,59 @@ install() {
   log_message "Installation process completed successfully"
 }
 
+# Function to configure with shh-admin
+configure_with_admin() {
+  if [ "$ACTION" = "install" ]; then
+    echo ""
+    echo -e "${BLUE}=== Automatic Configuration ===${NC}"
+    echo -e "Would you like to configure AWS Secrets Manager now? This will:"
+    echo -e "  1. Setup required environment variables"
+    echo -e "  2. Create or access your AWS Secrets Manager secret"
+    echo -e "  3. Test your AWS credentials and permissions"
+    echo ""
+    echo -n "Configure Shh now? [Y/n/x]: "
+    read -r CONFIGURE_NOW
+    
+    # Handle exit option
+    handle_user_input "$CONFIGURE_NOW"
+    
+    if [[ ! "$CONFIGURE_NOW" =~ ^[Nn]$ ]]; then
+      # First run shh-env directly for environment configuration
+      echo -e "${GREEN}Setting up environment variables...${NC}"
+      # Use the scripts from the installation directory, not the system paths
+      if [ -x "$INSTALL_DIR/shh-env" ]; then
+        "$INSTALL_DIR/shh-env" --menu
+      else
+        echo -e "${RED}Error: Could not find shh-env in installation directory.${NC}"
+        return 1
+      fi
+      
+      # Now ask if they want to also create/check their secret
+      echo ""
+      echo -n "Would you like to verify/create your AWS Secret? [Y/n/x]: "
+      read -r VERIFY_SECRET
+      
+      # Handle exit option
+      handle_user_input "$VERIFY_SECRET"
+      
+      if [[ ! "$VERIFY_SECRET" =~ ^[Nn]$ ]]; then
+        # Run shh-admin with create flag
+        echo -e "${GREEN}Running shh-admin to verify/create AWS Secret...${NC}"
+        if [ -x "$INSTALL_DIR/shh-admin" ]; then
+          "$INSTALL_DIR/shh-admin" -c
+        else
+          echo -e "${RED}Error: Could not find shh-admin in installation directory.${NC}"
+          return 1
+        fi
+      else
+        echo -e "${YELLOW}You can run ${BLUE}shh-admin${NC} ${YELLOW}at any time to configure your AWS Secret.${NC}"
+      fi
+    else
+      echo -e "${YELLOW}You can run ${BLUE}shh-env${NC} and ${BLUE}shh-admin${NC} ${YELLOW}at any time to configure Shh.${NC}"
+    fi
+  fi
+}
+
 # Parse command line arguments
 if [ $# -gt 0 ]; then
   case "$1" in
@@ -563,5 +619,8 @@ elif [ "$ACTION" = "uninstall" ]; then
     echo -e "${YELLOW}Uninstallation canceled.${NC}"
   fi
 fi
+
+# Run configuration if this was an installation
+configure_with_admin
 
 exit 0
