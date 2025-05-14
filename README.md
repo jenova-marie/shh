@@ -50,6 +50,9 @@ Instead, Shh provides:
 - 🖥️ **Beautiful UI** – Intuitive and visually appealing terminal interface with color-coding.
 - 🔧 **Automation Support** – Fully scriptable for CI/CD pipelines and automated deployments.
 - 🔄 **Self-Updating** – Easy in-place updates that keep your installation current with the latest features.
+- 🔑 **Secure Key Generation** – Generate SSH keys directly with RAM disk support for zero disk persistence.
+- 🔥 **Secure Key Destruction** – Automatically shred keys after upload with multiple secure deletion methods.
+- 🔀 **Complete SSH Compatibility** – Acts as a drop-in replacement for SSH with support for all standard parameters.
 
 ## 📦 Installation
 
