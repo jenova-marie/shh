@@ -1,6 +1,6 @@
 # Shh: Secretly Managing Your SSH Keys
 
-Shh is an elegant command-line tool designed for **securely managing SSH keys and secrets** with **AWS Secrets Manager**. It ensures **seamless, automated, and encrypted** storage and retrieval of sensitive credentials, making your DevOps workflow more secure and efficient.
+Shh is an elegant command-line toolkit designed for **securely managing SSH keys and secrets** with **AWS Secrets Manager**. It ensures **seamless, automated, and encrypted** storage and retrieval of sensitive credentials, making your DevOps workflow more secure and efficient.
 
 ## 🚀 Features
 - 🔐 **Secure SSH Key Storage** – Store and retrieve SSH private keys securely from AWS Secrets Manager.
@@ -11,21 +11,30 @@ Shh is an elegant command-line tool designed for **securely managing SSH keys an
 - 📎 **Public Key Support** – Upload `.pub` keys alongside private keys for seamless key management.
 - 🌍 **Region Flexibility** – Configure AWS regions via CLI arguments or environment variables.
 - ⚙️ **Environment Management** – Easily configure, persist, and manage Shh environment variables.
+- 🖥️ **Beautiful UI** – Intuitive and visually appealing terminal interface with color-coding.
+- 🔧 **Automation Support** – Fully scriptable for CI/CD pipelines and automated deployments.
 
 ## 📦 Installation
 
 ### Prerequisites
 - AWS CLI installed and configured with appropriate permissions
-- `jq` for JSON processing
+- `jq` for JSON processing (version 1.5+)
 - `ssh-agent` running on your system
 - `git` for cloning the repository
+- Bash shell environment (version 4.0+)
 
 ### Quick Installation
 The easiest way to install Shh is using our installation script:
 
 ```bash
-# Install Shh with one command - downloads AND executes installer script
+# Basic installation with interactive prompts
 curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash
+
+# Fully automated installation with HTTPS (recommended for CI/CD)
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s -- --https --auto
+
+# Specify SSH as clone method (if you have GitHub SSH keys configured)
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s -- --ssh
 ```
 
 This will:
@@ -34,34 +43,69 @@ This will:
 3. Create symlinks in `/usr/local/bin`
 4. Set proper permissions
 5. Log all installation activities to `/var/log/shh.log`
+6. Guide you through initial configuration
 
-### Manual Review Before Installation
+### Installation Options
+
+The installer supports several options to customize the installation process:
+
+| Option | Description |
+|--------|-------------|
+| `--ssh` | Use SSH for cloning the repository (requires GitHub SSH setup) |
+| `--https` | Use HTTPS for cloning the repository (more reliable for CI/CD) |
+| `--auto` | Fully automated installation with minimal prompts (uses defaults) |
+| `install` | Explicitly specify installation mode (default if not specified) |
+| `--help` | Show usage information and all available options |
+
+Examples:
+```bash
+# Combine options for customized installation
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s -- install --https --auto
+```
+
+### Manual Installation
 If you'd like to review the installer before running it (recommended):
 
 ```bash
 # Download installation script ONLY (does NOT execute)
-curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install -o shh-install
 
 # Make it executable
 chmod +x shh-install
 
-# Run the installer
+# Run the installer (can add options here too)
 ./shh-install
+
+# Example with options
+./shh-install --https --auto
 ```
 
 ### Uninstallation
 To remove Shh from your system:
 
 ```bash
-# Uninstall directly (downloads AND executes with uninstall option)
-curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s uninstall
+# Interactive uninstallation (with prompts for confirmation)
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s -- uninstall
 
-# Or if you have the script locally
+# Fully automated uninstallation (no prompts)
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s -- uninstall --auto
+
+# If you have the script locally
 ./shh-install uninstall
+./shh-install uninstall --auto  # Non-interactive mode
 ```
+
+The uninstallation process will:
+- Remove all symlinks from `/usr/local/bin`
+- Delete the installation directory at `/usr/local/share/shh`
+- Offer to clean up environment variables from your shell configuration files
+- Preserve the log file at `/var/log/shh.log` for reference
+
+## ⚙️ Configuration
 
 ### Environment Configuration
 You can configure Shh with environment variables:
+
 ```bash
 # Regional configuration (in order of precedence)
 export SHH_REGION="us-east-2"  # Preferred region
@@ -75,9 +119,13 @@ export SHH_SECRETS="my-ssh-keys"  # Name of your AWS Secrets Manager secret
 export SHH_DEBUG="true"  # Enable debug mode
 ```
 
-The `shh-env` tool makes managing these environment variables easier:
+### Interactive Configuration (shh-env)
+The `shh-env` tool provides a beautiful interactive interface for managing environment variables:
 
 ```bash
+# Launch interactive menu
+shh-env
+
 # Display current environment configuration
 shh-env --display
 
@@ -90,18 +138,29 @@ shh-env --reset
 
 # Persist environment variables to your shell config
 shh-env --persist
+
+# Enable debug output
+shh-env --debug
 ```
 
-You can also access environment management through other Shh tools:
+### AWS Secret Configuration (shh-admin)
+The `shh-admin` tool helps create and manage your AWS Secrets Manager secret:
+
 ```bash
-# With shh-admin
+# Launch interactive mode
+shh-admin
+
+# Create or verify your AWS secret (non-interactive)
+shh-admin --create
+
+# Configure environment variables only
 shh-admin --env
 
-# With shh (exits after environment management)
-shh --env
+# List keys in your secret
+shh-admin --list
 
-# With shh-add (exits after environment management)
-shh-add --env
+# All options combined
+shh-admin --region us-west-2 --secret prod-keys --list --debug
 ```
 
 ## 🛠️ Usage
@@ -153,6 +212,9 @@ shh -i mykey_ed25519 -p 2222 user@hostname
 
 # Enable debug output
 shh --debug user@hostname
+
+# Configure environment variables
+shh --env
 ```
 
 The `shh` command performs the following steps:
@@ -165,67 +227,31 @@ The `shh` command performs the following steps:
 5. Adds the key to `ssh-agent` in memory (no disk writes) if needed
 6. Connects to the specified server
 
-### 🔍 **Manage Keys with `shh-admin`**
-The `shh-admin` tool helps you manage your secrets in AWS Secrets Manager:
+## 🏗️ Project Architecture
 
-```bash
-# Interactive mode
-shh-admin
+The Shh toolkit consists of several components, each with a specific purpose:
 
-# List all keys in the specified secret
-shh-admin --list
-shh-admin -l
+| Component | Description |
+|-----------|-------------|
+| **shh** | Main command for SSH connections using keys from AWS Secrets Manager |
+| **shh-add** | Tool for adding SSH keys to AWS Secrets Manager |
+| **shh-admin** | Administration utility for managing secrets and IAM permissions |
+| **shh-env** | Environment variable management with beautiful UI |
+| **shh-install** | Installer/uninstaller script with automation support |
 
-# Specify AWS region
-shh-admin --region us-east-2
-shh-admin -r us-east-2
+### Installation Directory Structure
+The toolkit is installed in:
+- `/usr/local/share/shh/` - Main installation directory containing all scripts
+- `/usr/local/bin/` - Symlinks to the scripts for easy command-line access
+- `/var/log/shh.log` - System log file for installation and operation events
 
-# Specify secret name
-shh-admin --secret my-ssh-keys
-shh-admin -s my-ssh-keys
-
-# Show detailed information about a specific key
-shh-admin --detail mykey_ed25519
-shh-admin -d mykey_ed25519
-
-# Enable debug output
-shh-admin --debug
-```
-
-#### Key Management Features
-- Displays key metadata including type, size, and rotation schedule
-- Shows key version history and update timestamps
-- Views public key contents when available
-- Creates new AWS Secrets Manager secrets if they don't exist
-- Verifies appropriate AWS IAM permissions
-
-### ⚙️ **Manage Environment with `shh-env`**
-The `shh-env` tool helps you configure, view, and persist environment settings:
-
-```bash
-# Display current environment configuration
-shh-env --display
-
-# Set environment variables for current session
-shh-env --set SHH_REGION=us-west-2
-shh-env --set SHH_SECRETS=prod-ssh-keys
-
-# Reset all SHH environment variables to defaults
-shh-env --reset
-
-# Persist environment variables to your shell config
-shh-env --persist
-
-# Enable debug output
-shh-env --debug
-```
-
-#### Environment Management Features
-- Automatically detects your shell and modifies the appropriate config file
-- Creates backups before modifying shell configuration files
-- Only manages SHH_* prefixed environment variables
-- Provides context about related AWS environment variables
-- Can be accessed through all other Shh tools with the `--env` flag
+### Design Philosophy
+The Shh toolkit follows these design principles:
+- **Security First**: No sensitive data written to disk, all operations in memory
+- **User Experience**: Beautiful UI with consistent color scheme and formatting
+- **Integration**: Works with existing AWS and SSH tools seamlessly
+- **Automation**: Full support for CI/CD pipelines and scripted operation
+- **Best Practices**: Encourages key rotation and secure credential management
 
 ## 🔄 Key Rotation Best Practices
 Shh includes key rotation features:
@@ -262,6 +288,43 @@ shh-env --debug
 - Keys are securely transmitted from AWS Secrets Manager to SSH agent in memory
 - All AWS connections use your authenticated AWS CLI credentials
 - Key fingerprints are stored to verify agent-loaded keys without requiring passphrase entry
+- All scripts use set -e to ensure they exit immediately on errors
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**Issue**: Script not found after installation
+**Solution**: Check that symlinks were created properly in `/usr/local/bin`
+
+```bash
+ls -la /usr/local/bin/shh*
+```
+
+**Issue**: AWS authentication failures
+**Solution**: Check your AWS credentials and run:
+
+```bash
+aws sts get-caller-identity
+```
+
+**Issue**: SSH agent not running
+**Solution**: Start ssh-agent manually:
+
+```bash
+eval "$(ssh-agent -s)"
+```
+
+### Logs and Debugging
+The main log file is located at:
+```
+/var/log/shh.log
+```
+
+For verbose output, add the `--debug` flag to any command:
+```bash
+shh --debug user@host
+```
 
 ## 🌍 Open Source & Contributions
 We welcome contributions, improvements, and suggestions for enhancements.

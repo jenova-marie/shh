@@ -12,7 +12,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
 RED="\033[0;31m"
-BLUE="\033[0;34m"
+PINK="\033[38;5;198m"  # Hot pink/fuschia color
 NC="\033[0m" # No Color
 
 # Repository URLs
@@ -87,7 +87,7 @@ read_input() {
 
 # Print banner
 print_banner() {
-  echo -e "${BLUE}"
+  echo -e "${PINK}"
   echo "  ███████╗██╗  ██╗██╗  ██╗"
   echo "  ██╔════╝██║  ██║██║  ██║"
   echo "  ███████╗███████║███████║"
@@ -104,18 +104,18 @@ print_banner() {
 
 # Explain sudo usage and permissions
 explain_sudo_usage() {
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║        ${YELLOW}Important Information About Permissions${BLUE}   ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║        ${YELLOW}Important Information About Permissions${PINK}   ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   echo -e "This script may require administrator privileges (sudo) to:"
-  echo -e "  ${YELLOW}•${NC} Create the installation directory: ${BLUE}$INSTALL_DIR${NC}"
-  echo -e "  ${YELLOW}•${NC} Create symlinks in: ${BLUE}$BIN_DIR${NC}"
-  echo -e "  ${YELLOW}•${NC} Write to the log file: ${BLUE}$LOG_FILE${NC}"
+  echo -e "  ${YELLOW}•${NC} Create the installation directory: ${PINK}$INSTALL_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Create symlinks in: ${PINK}$BIN_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Write to the log file: ${PINK}$LOG_FILE${NC}"
   echo ""
   echo -e "${GREEN}Note:${NC} Sudo is only required for installation/uninstallation. The Shh tools themselves"
   echo -e "      do not require sudo privileges for normal operation."
   echo ""
-  echo -e "All operations performed by this script are logged to: ${BLUE}$LOG_FILE${NC}"
+  echo -e "All operations performed by this script are logged to: ${PINK}$LOG_FILE${NC}"
   echo ""
   
   # If in automated mode, automatically continue
@@ -126,12 +126,12 @@ explain_sudo_usage() {
     return
   fi
   
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║                    ${YELLOW}Options${BLUE}                    ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║                    ${YELLOW}Options${PINK}                    ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   echo -e "  ${GREEN}1${NC}) Continue with the installation (sudo password prompted when needed)"
-  echo -e "  ${GREEN}2${NC}) Run with sudo upfront: ${BLUE}sudo curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | sudo bash${NC}"
-  echo -e "  ${GREEN}3${NC}) Review script first: ${BLUE}curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | less${NC}"
+  echo -e "  ${GREEN}2${NC}) Run with sudo upfront: ${PINK}sudo curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | sudo bash${NC}"
+  echo -e "  ${GREEN}3${NC}) Review script first: ${PINK}curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | less${NC}"
   echo -e "  ${GREEN}X${NC}) Exit the script"
   echo ""
   
@@ -150,9 +150,9 @@ explain_sudo_usage() {
   USER_CONSENT=true
   
   # Now we can start logging
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║         ${GREEN}Starting Installation Process${BLUE}          ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║         ${GREEN}Starting Installation Process${PINK}          ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Starting installation process..."
 }
 
@@ -177,7 +177,7 @@ log_message() {
   # Append to log file, creating it if it doesn't exist
   if [ ! -f "$LOG_FILE" ]; then
     if [ ! -w "$(dirname "$LOG_FILE")" ]; then
-      echo -e "${YELLOW}Sudo required:${NC} Creating log file at ${BLUE}$LOG_FILE${NC} (requires system directory access)"
+      echo -e "${YELLOW}Sudo required:${NC} Creating log file at ${PINK}$LOG_FILE${NC} (requires system directory access)"
       sudo touch "$LOG_FILE"
       sudo chmod 644 "$LOG_FILE"
     else
@@ -190,7 +190,7 @@ log_message() {
   if [ -w "$LOG_FILE" ]; then
     echo "$log_entry" >> "$LOG_FILE"
   else
-    echo -e "${YELLOW}Sudo required:${NC} Writing to log file at ${BLUE}$LOG_FILE${NC} (requires system file access)"
+    echo -e "${YELLOW}Sudo required:${NC} Writing to log file at ${PINK}$LOG_FILE${NC} (requires system file access)"
     echo "$log_entry" | sudo tee -a "$LOG_FILE" >/dev/null
   fi
 }
@@ -268,24 +268,24 @@ clone_repo() {
         log_message "User chose not to try HTTPS after SSH failure"
         echo -e "${YELLOW}⚠️ Clone operation canceled.${NC}"
         echo -e "  You may need to setup your SSH keys for GitHub."
-        echo -e "  Visit: ${BLUE}https://docs.github.com/en/authentication/connecting-to-github-with-ssh${NC}"
+        echo -e "  Visit: ${PINK}https://docs.github.com/en/authentication/connecting-to-github-with-ssh${NC}"
         exit 1
       fi
     fi
   fi
   
   # If no clone method was specified, show options and prompt
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║           Repository Clone Options            ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║           Repository Clone Options            ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   echo -e "The script needs to download the latest code from GitHub:"
   echo ""
-  echo -e "  ${GREEN}1${NC}) ${BLUE}SSH Clone${NC} (${SSH_REPO_URL})"
+  echo -e "  ${GREEN}1${NC}) ${PINK}SSH Clone${NC} (${SSH_REPO_URL})"
   echo -e "     ${YELLOW}•${NC} More secure and recommended for developers"
   echo -e "     ${YELLOW}•${NC} Requires SSH keys configured with GitHub"
   echo -e "     ${YELLOW}•${NC} May prompt for SSH key passphrase if protected"
   echo ""
-  echo -e "  ${GREEN}2${NC}) ${BLUE}HTTPS Clone${NC} (${HTTPS_REPO_URL})"
+  echo -e "  ${GREEN}2${NC}) ${PINK}HTTPS Clone${NC} (${HTTPS_REPO_URL})"
   echo -e "     ${YELLOW}•${NC} Works without SSH key setup"
   echo -e "     ${YELLOW}•${NC} More reliable for automation"
   echo -e "     ${YELLOW}•${NC} No passphrase prompt required"
@@ -343,7 +343,7 @@ clone_repo() {
         log_message "User chose not to try HTTPS after SSH failure"
         echo -e "${YELLOW}⚠️ Clone operation canceled.${NC}"
         echo -e "  You may need to setup your SSH keys for GitHub."
-        echo -e "  Visit: ${BLUE}https://docs.github.com/en/authentication/connecting-to-github-with-ssh${NC}"
+        echo -e "  Visit: ${PINK}https://docs.github.com/en/authentication/connecting-to-github-with-ssh${NC}"
         exit 1
       fi
     fi
@@ -360,7 +360,7 @@ create_install_directory() {
   if [ ! -d "$INSTALL_DIR" ]; then
     if [ ! -w "$(dirname "$INSTALL_DIR")" ]; then
       log_message "Requesting sudo permissions to create $INSTALL_DIR (current user lacks write permission)"
-      echo -e "${YELLOW}Sudo required:${NC} Creating installation directory at ${BLUE}$INSTALL_DIR${NC}"
+      echo -e "${YELLOW}Sudo required:${NC} Creating installation directory at ${PINK}$INSTALL_DIR${NC}"
       if ! sudo mkdir -p "$INSTALL_DIR"; then
         log_message "Error: Failed to create installation directory."
         exit 1
@@ -408,7 +408,7 @@ create_symlinks() {
   if [ ! -w "$BIN_DIR" ]; then
     use_sudo=true
     log_message "Requesting sudo permissions to create symlinks in $BIN_DIR (current user lacks write permission)"
-    echo -e "${YELLOW}Sudo required:${NC} Creating symlinks in system directory ${BLUE}$BIN_DIR${NC}"
+    echo -e "${YELLOW}Sudo required:${NC} Creating symlinks in system directory ${PINK}$BIN_DIR${NC}"
   fi
   
   # Create symlinks for each executable
@@ -496,7 +496,7 @@ remove_install_directory() {
     log_message "Removing installation directory $INSTALL_DIR..."
     
     if [ ! -w "$(dirname "$INSTALL_DIR")" ] || [ ! -w "$INSTALL_DIR" ]; then
-      echo -e "${YELLOW}Sudo required:${NC} Removing installation directory at ${BLUE}$INSTALL_DIR${NC}"
+      echo -e "${YELLOW}Sudo required:${NC} Removing installation directory at ${PINK}$INSTALL_DIR${NC}"
       if ! sudo rm -rf "$INSTALL_DIR"; then
         log_message "Error: Failed to remove installation directory."
         exit 1
@@ -517,25 +517,25 @@ remove_install_directory() {
 # Function to uninstall the application
 uninstall() {
   # Explain sudo usage for uninstallation
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║        ${RED}Uninstallation Information${BLUE}            ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║        ${RED}Uninstallation Information${PINK}            ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   echo -e "This uninstallation process may require administrator privileges (sudo) to:"
-  echo -e "  ${YELLOW}•${NC} Remove symlinks from: ${BLUE}$BIN_DIR${NC}"
-  echo -e "  ${YELLOW}•${NC} Remove the installation directory: ${BLUE}$INSTALL_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Remove symlinks from: ${PINK}$BIN_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Remove the installation directory: ${PINK}$INSTALL_DIR${NC}"
   echo ""
   echo -e "${GREEN}Note:${NC} Sudo is only required for uninstallation. The Shh tools themselves"
   echo -e "      do not require sudo privileges for normal operation."
   echo ""
-  echo -e "All operations performed will be logged to: ${BLUE}$LOG_FILE${NC}"
+  echo -e "All operations performed will be logged to: ${PINK}$LOG_FILE${NC}"
   echo ""
   
   # User has consented to proceed with uninstallation
   USER_CONSENT=true
   
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║          ${RED}Beginning Uninstallation${BLUE}            ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║          ${RED}Beginning Uninstallation${PINK}            ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Beginning uninstallation of Shh..."
   
   # Detect all installed executables
@@ -547,7 +547,7 @@ uninstall() {
   local use_sudo=false
   if [ ! -w "$BIN_DIR" ]; then
     use_sudo=true
-    echo -e "${YELLOW}Sudo required:${NC} Removing symlinks from system directory ${BLUE}$BIN_DIR${NC}"
+    echo -e "${YELLOW}Sudo required:${NC} Removing symlinks from system directory ${PINK}$BIN_DIR${NC}"
     log_message "Requesting sudo permissions to remove symlinks from $BIN_DIR (current user lacks write permission)"
   fi
   
@@ -559,10 +559,10 @@ uninstall() {
         rm -f "$BIN_DIR/$cmd"
       fi
       log_message "Removed symlink $BIN_DIR/$cmd"
-      echo -e "${GREEN}✓ Removed symlink:${NC} ${BLUE}$BIN_DIR/$cmd${NC}"
+      echo -e "${GREEN}✓ Removed symlink:${NC} ${PINK}$BIN_DIR/$cmd${NC}"
     elif [ -f "$BIN_DIR/$cmd" ]; then
       log_message "Warning: $BIN_DIR/$cmd exists but is not a symlink. Skipping."
-      echo -e "${YELLOW}⚠️ Warning:${NC} ${BLUE}$BIN_DIR/$cmd${NC} exists but is not a symlink. Skipping."
+      echo -e "${YELLOW}⚠️ Warning:${NC} ${PINK}$BIN_DIR/$cmd${NC} exists but is not a symlink. Skipping."
     fi
   done
   
@@ -570,9 +570,9 @@ uninstall() {
   remove_install_directory
   
   # Clean up shell config files
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║        ${YELLOW}Environment Variable Cleanup${BLUE}          ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║        ${YELLOW}Environment Variable Cleanup${PINK}          ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Checking for Shh environment variables in shell config files..."
   
   local found_env_vars=false
@@ -580,7 +580,7 @@ uninstall() {
   for config_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.profile"; do
     if [ -f "$config_file" ] && grep -q "SHH_" "$config_file"; then
       found_env_vars=true
-      echo -e "${YELLOW}⚠️ Found Shh environment variables in:${NC} ${BLUE}$config_file${NC}"
+      echo -e "${YELLOW}⚠️ Found Shh environment variables in:${NC} ${PINK}$config_file${NC}"
       
       # In non-interactive mode, default to No (safer)
       read_input "Would you like to remove them? [y/N] " "N" "CONFIRM_ENV"
@@ -589,14 +589,14 @@ uninstall() {
         # Create backup
         cp "$config_file" "$config_file.shh-backup.$(date +%Y%m%d%H%M%S)"
         log_message "Created backup of $config_file"
-        echo -e "${GREEN}✓ Created backup:${NC} ${BLUE}$config_file.shh-backup.$(date +%Y%m%d%H%M%S)${NC}"
+        echo -e "${GREEN}✓ Created backup:${NC} ${PINK}$config_file.shh-backup.$(date +%Y%m%d%H%M%S)${NC}"
         
         # Remove SHH_ environment variables
         sed -i.bak '/^export SHH_/d' "$config_file"
         sed -i.bak '/^# SHH environment variables/d' "$config_file"
         rm -f "$config_file.bak"
         log_message "Removed Shh environment variables from $config_file"
-        echo -e "${GREEN}✓ Removed Shh environment variables from:${NC} ${BLUE}$config_file${NC}"
+        echo -e "${GREEN}✓ Removed Shh environment variables from:${NC} ${PINK}$config_file${NC}"
       fi
     fi
   done
@@ -605,30 +605,30 @@ uninstall() {
     echo -e "${GREEN}✓ No environment variables found in shell configuration files.${NC}"
   fi
   
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║        ${GREEN}Uninstallation Complete!${BLUE}             ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║        ${GREEN}Uninstallation Complete!${PINK}             ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Uninstallation completed successfully!"
 }
 
 # Function to display usage
 show_usage() {
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║           Shh Installer Help Menu             ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║           Shh Installer Help Menu             ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   echo ""
   echo -e "Usage: $0 [command] [options]"
   echo ""
   echo -e "${GREEN}Commands:${NC}"
-  echo -e "  ${BLUE}install${NC}     Install Shh (default if no command specified)"
-  echo -e "  ${BLUE}uninstall${NC}   Remove Shh from your system"
-  echo -e "  ${BLUE}help${NC}        Show this help message"
+  echo -e "  ${PINK}install${NC}     Install Shh (default if no command specified)"
+  echo -e "  ${PINK}uninstall${NC}   Remove Shh from your system"
+  echo -e "  ${PINK}help${NC}        Show this help message"
   echo ""
   echo -e "${GREEN}Options:${NC}"
-  echo -e "  ${BLUE}--ssh${NC}       Use SSH for cloning the repository (requires GitHub SSH setup)"
-  echo -e "  ${BLUE}--https${NC}     Use HTTPS for cloning the repository (more reliable)"
-  echo -e "  ${BLUE}--auto${NC}      Fully automated installation with minimal prompts"
-  echo -e "  ${BLUE}--help${NC}      Show this help message"
+  echo -e "  ${PINK}--ssh${NC}       Use SSH for cloning the repository (requires GitHub SSH setup)"
+  echo -e "  ${PINK}--https${NC}     Use HTTPS for cloning the repository (more reliable)"
+  echo -e "  ${PINK}--auto${NC}      Fully automated installation with minimal prompts"
+  echo -e "  ${PINK}--help${NC}      Show this help message"
   echo ""
   echo -e "${GREEN}Examples:${NC}"
   echo -e "  ${YELLOW}# Basic installation with interactive prompts${NC}"
@@ -718,14 +718,14 @@ install() {
   cleanup
   
   echo ""
-  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║        ${GREEN}Installation Complete!${BLUE}               ║${NC}"
-  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "${PINK}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${PINK}║        ${GREEN}Installation Complete!${PINK}               ║${NC}"
+  echo -e "${PINK}╚═══════════════════════════════════════════════╝${NC}"
   echo ""
   echo -e "You can now use the following commands:"
   echo ""
   for cmd in "${SHH_EXECUTABLES[@]}"; do
-    echo -e "  ${BLUE}$cmd${NC}"
+    echo -e "  ${PINK}$cmd${NC}"
   done
   echo ""
   echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
