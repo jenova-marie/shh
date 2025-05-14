@@ -2,6 +2,23 @@
 
 Shh is an elegant command-line toolkit designed for **securely managing SSH keys and secrets** with **AWS Secrets Manager**. It ensures **seamless, automated, and encrypted** storage and retrieval of sensitive credentials, making your DevOps workflow more secure and efficient.
 
+## 💫 Project Philosophy
+
+At its heart, Shh aims to solve a critical DevOps security challenge: **how to handle SSH keys securely across teams and environments**. 
+
+By leveraging AWS Secrets Manager, Shh eliminates dangerous practices like:
+- ❌ Storing unencrypted SSH keys in repositories
+- ❌ Sharing keys through insecure channels like email or chat
+- ❌ Managing keys without version control or rotation policies
+- ❌ Writing sensitive credentials to disk during deployment
+
+Instead, Shh provides:
+- ✅ Zero disk writes for sensitive operations
+- ✅ Beautiful and intuitive terminal UI
+- ✅ Seamless integration with existing tools
+- ✅ Intelligent key rotation and versioning
+- ✅ Consistent security best practices
+
 ## 🚀 Features
 - 🔐 **Secure SSH Key Storage** – Store and retrieve SSH private keys securely from AWS Secrets Manager.
 - ⚡ **Fast & Efficient** – Handles key injection into `ssh-agent` on the fly without writing to disk.
@@ -348,12 +365,65 @@ For verbose output, add the `--debug` flag to any command:
 shh --debug user@host
 ```
 
-## 🌍 Open Source & Contributions
-We welcome contributions, improvements, and suggestions for enhancements.
-```bash
-git clone git@github.com:jenova-marie/shh.git
-```
-Pull requests and issues are welcome!
+## 🌟 Contributing to Shh
+
+We welcome and encourage community contributions to Shh! Whether you're fixing bugs, improving documentation, or proposing new features, your help makes Shh better for everyone.
+
+### Development Principles
+
+When contributing to Shh, please keep these principles in mind:
+
+1. **Security First**: All changes must maintain or enhance the security model of Shh. No sensitive data should ever be written to disk during key retrieval operations.
+
+2. **Beautiful UI**: Maintain consistent visual styling with Unicode box-drawing characters, thoughtful color schemes, and emoji indicators for user feedback.
+
+3. **Documentation**: Update documentation alongside code changes. Documentation should be clear, accurate, and provide examples.
+
+4. **User Experience**: Make the tools intuitive and provide helpful feedback to users. Error messages should guide users toward solutions.
+
+5. **Compatibility**: Ensure backward compatibility where possible, especially for scripted/automated uses.
+
+### Getting Started with Development
+
+1. Fork the repository
+2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/shh.git`
+3. Create a feature branch: `git checkout -b my-new-feature`
+4. Make your changes
+5. Test thoroughly, especially edge cases
+6. Commit your changes: `git commit -am 'Add some feature'`
+7. Push to the branch: `git push origin my-new-feature`
+8. Submit a pull request
+
+### UI Guidelines
+
+The Shh toolkit prioritizes a beautiful and consistent terminal UI:
+
+- Use box-drawing characters (`╔═╗║╚╝`) for section headers
+- Use color consistently:
+  - Hot pink/fuschia for primary headings and success messages
+  - Yellow for warnings and important notes
+  - White for normal text
+  - Green for success indicators
+- Include emoji indicators for different types of messages:
+  - 💡 for tips and helpful information
+  - ⚠️ for warnings
+  - ✅ for success
+  - ❌ for errors
+- Format output with clear spacing and alignment
+- Group related information visually
+
+### Security Review Checklist
+
+Before submitting a pull request, ensure your code meets these security requirements:
+
+- [ ] No sensitive data is written to disk without explicit user permission
+- [ ] All temporary files are properly secured (permissions) and cleaned up
+- [ ] Error messages don't leak sensitive information
+- [ ] Proper error handling for all AWS operations
+- [ ] Input validation for all user-provided parameters
+- [ ] Follows the principle of least privilege for AWS operations
+
+We look forward to your contributions and ideas to make Shh even better!
 
 ## 📝 License
 Shh is released under the **MIT License**.
