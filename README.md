@@ -40,7 +40,7 @@ If you'd like to review the installer before running it (recommended):
 
 ```bash
 # Download installation script ONLY (does NOT execute)
-curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install -o shh-install
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash
 
 # Make it executable
 chmod +x shh-install

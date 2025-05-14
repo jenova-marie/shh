@@ -30,6 +30,10 @@ SHH_EXECUTABLES=("shh" "shh-add" "shh-admin" "shh-env")
 ACTION="install"
 # Flag to track if user has given consent
 USER_CONSENT=false
+# Default clone method (will be set by command line arguments or prompts)
+CLONE_METHOD=""
+# Flag for fully automated installation
+AUTOMATED=false
 
 # Helper function to handle user input with exit option
 handle_user_input() {
@@ -39,6 +43,45 @@ handle_user_input() {
   if [[ "$input" =~ ^[Xx]$ ]]; then
     echo -e "${YELLOW}Installation canceled by user.${NC}"
     exit 0
+  fi
+}
+
+# Function to check if we're running in an interactive terminal
+is_interactive() {
+  # Check if stdin is a terminal
+  if [ -t 0 ]; then
+    return 0  # True, running interactively
+  else
+    return 1  # False, not interactive (e.g., piped from curl)
+  fi
+}
+
+# Function to get user input or use default in non-interactive mode
+read_input() {
+  local prompt="$1"
+  local default="$2"
+  local var_name="$3"
+  
+  # If in automated mode, just use the default without showing prompt
+  if [ "$AUTOMATED" = true ]; then
+    eval "$var_name=\"$default\""
+    echo -e "$prompt${GREEN}$default${NC} ${YELLOW}(using default in automated mode)${NC}"
+    return
+  fi
+  
+  if is_interactive; then
+    # Interactive mode - prompt user
+    echo -e -n "$prompt"
+    read -r "$var_name"
+    
+    # If empty input, use default
+    if [ -z "${!var_name}" ]; then
+      eval "$var_name=\"$default\""
+    fi
+  else
+    # Non-interactive mode - use default and show what we're doing
+    eval "$var_name=\"$default\""
+    echo -e "$prompt${GREEN}$default${NC} ${YELLOW}(using default in non-interactive mode)${NC}"
   fi
 }
 
@@ -61,32 +104,45 @@ print_banner() {
 
 # Explain sudo usage and permissions
 explain_sudo_usage() {
-  echo -e "${RED}=== Important Information About Permissions ===${NC}"
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║        ${YELLOW}Important Information About Permissions${BLUE}   ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   echo -e "This script may require administrator privileges (sudo) to:"
-  echo -e "  1. Create the installation directory: ${BLUE}$INSTALL_DIR${NC}"
-  echo -e "  2. Create symlinks in: ${BLUE}$BIN_DIR${NC}"
-  echo -e "  3. Write to the log file: ${BLUE}$LOG_FILE${NC}"
+  echo -e "  ${YELLOW}•${NC} Create the installation directory: ${BLUE}$INSTALL_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Create symlinks in: ${BLUE}$BIN_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Write to the log file: ${BLUE}$LOG_FILE${NC}"
   echo ""
   echo -e "${GREEN}Note:${NC} Sudo is only required for installation/uninstallation. The Shh tools themselves"
   echo -e "      do not require sudo privileges for normal operation."
   echo ""
   echo -e "All operations performed by this script are logged to: ${BLUE}$LOG_FILE${NC}"
-  echo -e "You can inspect this log file to review all actions taken during installation."
   echo ""
-  echo -e "${YELLOW}Options:${NC}"
-  echo -e "  1. Continue with the installation (you'll be prompted for sudo password when needed)"
-  echo -e "  2. Run this script with sudo upfront: ${BLUE}sudo curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | sudo bash${NC}"
-  echo -e "  3. Review this script before proceeding: ${BLUE}curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | less${NC}"
-  echo -e "  Enter 'x' at any prompt to exit the script"
+  
+  # If in automated mode, automatically continue
+  if [ "$AUTOMATED" = true ]; then
+    echo -e "${GREEN}✓ Proceeding automatically in automated mode...${NC}"
+    USER_CONSENT=true
+    log_message "Starting installation process in automated mode"
+    return
+  fi
+  
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║                    ${YELLOW}Options${BLUE}                    ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "  ${GREEN}1${NC}) Continue with the installation (sudo password prompted when needed)"
+  echo -e "  ${GREEN}2${NC}) Run with sudo upfront: ${BLUE}sudo curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | sudo bash${NC}"
+  echo -e "  ${GREEN}3${NC}) Review script first: ${BLUE}curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | less${NC}"
+  echo -e "  ${GREEN}X${NC}) Exit the script"
   echo ""
-  echo -n "Would you like to continue with the installation? [Y/n/x]: "
-  read -r CONFIRM_INSTALL
+  
+  # In non-interactive mode, default to yes
+  read_input "Would you like to continue with the installation? [Y/n/x]: " "Y" "CONFIRM_INSTALL"
   
   # Handle exit option
   handle_user_input "$CONFIRM_INSTALL"
   
   if [[ "$CONFIRM_INSTALL" =~ ^[Nn]$ ]]; then
-    echo -e "${YELLOW}Installation canceled by user.${NC}"
+    echo -e "${YELLOW}⚠️ Installation canceled by user.${NC}"
     exit 0
   fi
   
@@ -94,7 +150,9 @@ explain_sudo_usage() {
   USER_CONSENT=true
   
   # Now we can start logging
-  echo -e "${BLUE}Starting installation process...${NC}"
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║         ${GREEN}Starting Installation Process${BLUE}          ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Starting installation process..."
 }
 
@@ -166,77 +224,133 @@ check_dependencies() {
 clone_repo() {
   log_message "Preparing to clone repository..."
   
-  echo -e "${YELLOW}=== Repository Clone Options ===${NC}"
-  echo -e "The script needs to download the latest code from GitHub. You have two options:"
-  echo ""
-  echo -e "  1. ${BLUE}SSH Clone${NC} (${SSH_REPO_URL})"
-  echo -e "     - More secure and recommended for developers"
-  echo -e "     - Requires SSH keys configured with GitHub"
-  echo -e "     - ${YELLOW}Will prompt for your SSH key passphrase if your key is protected${NC}"
-  echo -e "     - To avoid future prompts, consider adding your key to ssh-agent:"
-  echo -e "       ${BLUE}ssh-add ~/.ssh/id_ed25519${NC} (or your key path)"
-  echo -e "       On macOS, keys added to keychain (with ${BLUE}ssh-add -K${NC}) persist across reboots"
-  echo ""
-  echo -e "  2. ${BLUE}HTTPS Clone${NC} (${HTTPS_REPO_URL})"
-  echo -e "     - Works without SSH key setup"
-  echo -e "     - May be faster in some environments"
-  echo -e "     - No passphrase prompt required"
-  echo ""
-  echo -e "  Enter 'x' to exit the script"
-  echo ""
-  echo -n "Which cloning method do you prefer? [1/2/x]: "
-  read -r CLONE_CHOICE
-  
-  # Handle exit option
-  handle_user_input "$CLONE_CHOICE"
-  
-  if [[ "$CLONE_CHOICE" == "2" ]]; then
-    log_message "User selected HTTPS cloning"
-    echo -e "Using HTTPS to clone repository..."
+  # If clone method was already specified via command line, use it directly
+  if [ "$CLONE_METHOD" = "https" ]; then
+    log_message "Using HTTPS clone method (specified via command line)"
+    echo -e "${GREEN}✓ Using HTTPS to clone repository (as requested)...${NC}"
     if git clone "$HTTPS_REPO_URL" "$TEMP_DIR/shh"; then
       log_message "Repository cloned successfully using HTTPS!"
       return 0
     else
       log_message "Error: Failed to clone repository using HTTPS."
-      echo "Please check your network connection and repository access."
+      echo -e "${RED}✗ Clone failed. Please check your network connection and repository access.${NC}"
       exit 1
     fi
-  elif [[ "$CLONE_CHOICE" == "1" ]] || [[ -z "$CLONE_CHOICE" ]]; then
-    # Default or explicit choice for SSH
-    log_message "User selected SSH cloning (may prompt for SSH key passphrase)"
-    echo -e "Using SSH to clone repository..."
+  elif [ "$CLONE_METHOD" = "ssh" ]; then
+    log_message "Using SSH clone method (specified via command line)"
+    echo -e "${GREEN}✓ Using SSH to clone repository (as requested)...${NC}"
     if git clone "$SSH_REPO_URL" "$TEMP_DIR/shh"; then
       log_message "Repository cloned successfully using SSH!"
       return 0
     else
-      echo -e "${YELLOW}SSH clone failed. Would you like to try HTTPS instead? [Y/n/x]:${NC} "
-      read -r TRY_HTTPS
+      log_message "Error: Failed to clone repository using SSH."
+      echo -e "${RED}✗ SSH clone failed.${NC}"
+      
+      # Even with --ssh, offer HTTPS as fallback
+      read_input "Would you like to try HTTPS instead? [Y/n/x]: " "Y" "TRY_HTTPS"
       
       # Handle exit option
       handle_user_input "$TRY_HTTPS"
       
       if [[ ! "$TRY_HTTPS" =~ ^[Nn]$ ]]; then
         log_message "Falling back to HTTPS after SSH failure"
-        echo -e "Trying HTTPS clone instead..."
+        echo -e "${YELLOW}⚠️ Trying HTTPS clone instead...${NC}"
         if git clone "$HTTPS_REPO_URL" "$TEMP_DIR/shh"; then
           log_message "Repository cloned successfully using HTTPS!"
           return 0
         else
           log_message "Error: Failed to clone repository using either SSH or HTTPS."
-          echo "Please check your network connection and repository access."
+          echo -e "${RED}✗ Clone failed with both SSH and HTTPS.${NC}"
+          echo -e "  Please check your network connection and repository access."
           exit 1
         fi
       else
         log_message "User chose not to try HTTPS after SSH failure"
-        echo "Clone operation canceled. You may need to setup your SSH keys for GitHub."
-        echo "Visit: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+        echo -e "${YELLOW}⚠️ Clone operation canceled.${NC}"
+        echo -e "  You may need to setup your SSH keys for GitHub."
+        echo -e "  Visit: ${BLUE}https://docs.github.com/en/authentication/connecting-to-github-with-ssh${NC}"
+        exit 1
+      fi
+    fi
+  fi
+  
+  # If no clone method was specified, show options and prompt
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║           Repository Clone Options            ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "The script needs to download the latest code from GitHub:"
+  echo ""
+  echo -e "  ${GREEN}1${NC}) ${BLUE}SSH Clone${NC} (${SSH_REPO_URL})"
+  echo -e "     ${YELLOW}•${NC} More secure and recommended for developers"
+  echo -e "     ${YELLOW}•${NC} Requires SSH keys configured with GitHub"
+  echo -e "     ${YELLOW}•${NC} May prompt for SSH key passphrase if protected"
+  echo ""
+  echo -e "  ${GREEN}2${NC}) ${BLUE}HTTPS Clone${NC} (${HTTPS_REPO_URL})"
+  echo -e "     ${YELLOW}•${NC} Works without SSH key setup"
+  echo -e "     ${YELLOW}•${NC} More reliable for automation"
+  echo -e "     ${YELLOW}•${NC} No passphrase prompt required"
+  echo ""
+  echo -e "  ${GREEN}X${NC}) Exit the script"
+  echo ""
+  
+  # In non-interactive mode, default to HTTPS clone (more reliable for automation)
+  read_input "Which cloning method do you prefer? [1/2/x]: " "2" "CLONE_CHOICE"
+  
+  # Handle exit option
+  handle_user_input "$CLONE_CHOICE"
+  
+  if [[ "$CLONE_CHOICE" == "2" ]]; then
+    log_message "User selected HTTPS cloning"
+    echo -e "${GREEN}✓ Using HTTPS to clone repository...${NC}"
+    if git clone "$HTTPS_REPO_URL" "$TEMP_DIR/shh"; then
+      log_message "Repository cloned successfully using HTTPS!"
+      return 0
+    else
+      log_message "Error: Failed to clone repository using HTTPS."
+      echo -e "${RED}✗ Clone failed. Please check your network connection and repository access.${NC}"
+      exit 1
+    fi
+  elif [[ "$CLONE_CHOICE" == "1" ]] || [[ -z "$CLONE_CHOICE" ]]; then
+    # Default or explicit choice for SSH
+    log_message "User selected SSH cloning"
+    echo -e "${GREEN}✓ Using SSH to clone repository...${NC}"
+    echo -e "${YELLOW}⚠️ This may prompt for your SSH key passphrase if protected${NC}"
+    if git clone "$SSH_REPO_URL" "$TEMP_DIR/shh"; then
+      log_message "Repository cloned successfully using SSH!"
+      return 0
+    else
+      echo -e "${RED}✗ SSH clone failed.${NC}"
+      
+      # In non-interactive mode, default to trying HTTPS
+      read_input "Would you like to try HTTPS instead? [Y/n/x]: " "Y" "TRY_HTTPS"
+      
+      # Handle exit option
+      handle_user_input "$TRY_HTTPS"
+      
+      if [[ ! "$TRY_HTTPS" =~ ^[Nn]$ ]]; then
+        log_message "Falling back to HTTPS after SSH failure"
+        echo -e "${YELLOW}⚠️ Trying HTTPS clone instead...${NC}"
+        if git clone "$HTTPS_REPO_URL" "$TEMP_DIR/shh"; then
+          log_message "Repository cloned successfully using HTTPS!"
+          return 0
+        else
+          log_message "Error: Failed to clone repository using either SSH or HTTPS."
+          echo -e "${RED}✗ Clone failed with both SSH and HTTPS.${NC}"
+          echo -e "  Please check your network connection and repository access."
+          exit 1
+        fi
+      else
+        log_message "User chose not to try HTTPS after SSH failure"
+        echo -e "${YELLOW}⚠️ Clone operation canceled.${NC}"
+        echo -e "  You may need to setup your SSH keys for GitHub."
+        echo -e "  Visit: ${BLUE}https://docs.github.com/en/authentication/connecting-to-github-with-ssh${NC}"
         exit 1
       fi
     fi
   else
     # Invalid choice
-    echo -e "${YELLOW}Invalid option '${CLONE_CHOICE}'. Please select 1 or 2.${NC}"
-    echo -e "Installation canceled."
+    echo -e "${RED}✗ Invalid option '${CLONE_CHOICE}'. Please select 1 or 2.${NC}"
+    echo -e "${YELLOW}⚠️ Installation canceled.${NC}"
     exit 1
   fi
 }
@@ -403,21 +517,25 @@ remove_install_directory() {
 # Function to uninstall the application
 uninstall() {
   # Explain sudo usage for uninstallation
-  echo -e "${RED}=== Important Information About Permissions ===${NC}"
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║        ${RED}Uninstallation Information${BLUE}            ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   echo -e "This uninstallation process may require administrator privileges (sudo) to:"
-  echo -e "  1. Remove symlinks from: ${BLUE}$BIN_DIR${NC}"
-  echo -e "  2. Remove the installation directory: ${BLUE}$INSTALL_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Remove symlinks from: ${BLUE}$BIN_DIR${NC}"
+  echo -e "  ${YELLOW}•${NC} Remove the installation directory: ${BLUE}$INSTALL_DIR${NC}"
   echo ""
   echo -e "${GREEN}Note:${NC} Sudo is only required for uninstallation. The Shh tools themselves"
   echo -e "      do not require sudo privileges for normal operation."
   echo ""
   echo -e "All operations performed will be logged to: ${BLUE}$LOG_FILE${NC}"
-  echo -e "You can inspect this log file to review all actions taken during uninstallation."
   echo ""
   
   # User has consented to proceed with uninstallation
   USER_CONSENT=true
   
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║          ${RED}Beginning Uninstallation${BLUE}            ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Beginning uninstallation of Shh..."
   
   # Detect all installed executables
@@ -441,8 +559,10 @@ uninstall() {
         rm -f "$BIN_DIR/$cmd"
       fi
       log_message "Removed symlink $BIN_DIR/$cmd"
+      echo -e "${GREEN}✓ Removed symlink:${NC} ${BLUE}$BIN_DIR/$cmd${NC}"
     elif [ -f "$BIN_DIR/$cmd" ]; then
       log_message "Warning: $BIN_DIR/$cmd exists but is not a symlink. Skipping."
+      echo -e "${YELLOW}⚠️ Warning:${NC} ${BLUE}$BIN_DIR/$cmd${NC} exists but is not a symlink. Skipping."
     fi
   done
   
@@ -450,39 +570,138 @@ uninstall() {
   remove_install_directory
   
   # Clean up shell config files
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║        ${YELLOW}Environment Variable Cleanup${BLUE}          ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Checking for Shh environment variables in shell config files..."
+  
+  local found_env_vars=false
+  
   for config_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zshrc" "$HOME/.profile"; do
     if [ -f "$config_file" ] && grep -q "SHH_" "$config_file"; then
-      echo -e "${YELLOW}Found Shh environment variables in $config_file.${NC}"
-      echo -n "Would you like to remove them? [y/N] "
-      read -r CONFIRM_ENV
+      found_env_vars=true
+      echo -e "${YELLOW}⚠️ Found Shh environment variables in:${NC} ${BLUE}$config_file${NC}"
+      
+      # In non-interactive mode, default to No (safer)
+      read_input "Would you like to remove them? [y/N] " "N" "CONFIRM_ENV"
+      
       if [[ "$CONFIRM_ENV" =~ ^[Yy]$ ]]; then
         # Create backup
         cp "$config_file" "$config_file.shh-backup.$(date +%Y%m%d%H%M%S)"
         log_message "Created backup of $config_file"
+        echo -e "${GREEN}✓ Created backup:${NC} ${BLUE}$config_file.shh-backup.$(date +%Y%m%d%H%M%S)${NC}"
         
         # Remove SHH_ environment variables
         sed -i.bak '/^export SHH_/d' "$config_file"
         sed -i.bak '/^# SHH environment variables/d' "$config_file"
         rm -f "$config_file.bak"
         log_message "Removed Shh environment variables from $config_file"
+        echo -e "${GREEN}✓ Removed Shh environment variables from:${NC} ${BLUE}$config_file${NC}"
       fi
     fi
   done
   
+  if [ "$found_env_vars" = false ]; then
+    echo -e "${GREEN}✓ No environment variables found in shell configuration files.${NC}"
+  fi
+  
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║        ${GREEN}Uninstallation Complete!${BLUE}             ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   log_message "Uninstallation completed successfully!"
 }
 
 # Function to display usage
 show_usage() {
-  echo "Usage: $0 [command]"
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║           Shh Installer Help Menu             ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   echo ""
-  echo "Commands:"
-  echo "  install     Install Shh (default if no command specified)"
-  echo "  uninstall   Remove Shh from your system"
-  echo "  help        Show this help message"
+  echo -e "Usage: $0 [command] [options]"
   echo ""
+  echo -e "${GREEN}Commands:${NC}"
+  echo -e "  ${BLUE}install${NC}     Install Shh (default if no command specified)"
+  echo -e "  ${BLUE}uninstall${NC}   Remove Shh from your system"
+  echo -e "  ${BLUE}help${NC}        Show this help message"
+  echo ""
+  echo -e "${GREEN}Options:${NC}"
+  echo -e "  ${BLUE}--ssh${NC}       Use SSH for cloning the repository (requires GitHub SSH setup)"
+  echo -e "  ${BLUE}--https${NC}     Use HTTPS for cloning the repository (more reliable)"
+  echo -e "  ${BLUE}--auto${NC}      Fully automated installation with minimal prompts"
+  echo -e "  ${BLUE}--help${NC}      Show this help message"
+  echo ""
+  echo -e "${GREEN}Examples:${NC}"
+  echo -e "  ${YELLOW}# Basic installation with interactive prompts${NC}"
+  echo -e "  $0"
+  echo -e ""
+  echo -e "  ${YELLOW}# Install using HTTPS clone method${NC}"
+  echo -e "  $0 install --https"
+  echo -e ""
+  echo -e "  ${YELLOW}# Fully automated installation with HTTPS${NC}"
+  echo -e "  $0 install --https --auto"
+  echo -e ""
+  echo -e "  ${YELLOW}# One-line installation with HTTPS (non-interactive)${NC}"
+  echo -e "  curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash -s -- --https --auto"
+  echo ""
+  exit 0
 }
+
+# Parse command line arguments before main execution
+parse_arguments() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      install)
+        ACTION="install"
+        shift
+        ;;
+      uninstall)
+        ACTION="uninstall"
+        shift
+        ;;
+      --ssh)
+        CLONE_METHOD="ssh"
+        shift
+        ;;
+      --https)
+        CLONE_METHOD="https"
+        shift
+        ;;
+      --auto)
+        AUTOMATED=true
+        shift
+        ;;
+      help|--help|-h)
+        show_usage
+        ;;
+      *)
+        echo -e "${RED}Unknown option: $1${NC}"
+        show_usage
+        ;;
+    esac
+  done
+}
+
+# Handle passed arguments
+# Convert -- style parameters that might be passed from bash -s
+if [[ "$*" == *"--"* ]]; then
+  ARGS=()
+  PROCESSING_DOUBLE_DASH=false
+  for ARG in "$@"; do
+    if [[ "$ARG" == "--" ]]; then
+      PROCESSING_DOUBLE_DASH=true
+      continue
+    fi
+    
+    if $PROCESSING_DOUBLE_DASH; then
+      ARGS+=("$ARG")
+    else
+      ARGS+=("$ARG")
+    fi
+  done
+  parse_arguments "${ARGS[@]}"
+else
+  parse_arguments "$@"
+fi
 
 # Main installation process
 install() {
@@ -499,21 +718,27 @@ install() {
   cleanup
   
   echo ""
-  echo -e "${GREEN}Shh has been successfully installed!${NC}"
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║        ${GREEN}Installation Complete!${BLUE}               ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
   echo ""
   echo -e "You can now use the following commands:"
+  echo ""
   for cmd in "${SHH_EXECUTABLES[@]}"; do
     echo -e "  ${BLUE}$cmd${NC}"
   done
   echo ""
-  echo -e "${BLUE}shh${NC} - Connect to servers using keys from AWS Secrets Manager"
-  echo -e "${BLUE}shh-add${NC} - Add SSH keys to AWS Secrets Manager"
-  echo -e "${BLUE}shh-admin${NC} - Manage your SSH keys in AWS Secrets Manager"
-  echo -e "${BLUE}shh-env${NC} - Manage environment variables for Shh"
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║             ${GREEN}Command Reference${BLUE}                ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "  ${BLUE}shh${NC} - Connect to servers using keys from AWS Secrets Manager"
+  echo -e "  ${BLUE}shh-add${NC} - Add SSH keys to AWS Secrets Manager"
+  echo -e "  ${BLUE}shh-admin${NC} - Manage your SSH keys in AWS Secrets Manager"
+  echo -e "  ${BLUE}shh-env${NC} - Manage environment variables for Shh"
   echo ""
-  echo -e "${YELLOW}Note:${NC} Make sure you have AWS credentials configured via 'aws configure'"
+  echo -e "${YELLOW}⚠️ Note:${NC} Make sure you have AWS credentials configured via ${BLUE}aws configure${NC}"
   echo -e "      or through environment variables before using Shh."
-  echo -e "${YELLOW}Log:${NC} All installation operations have been logged to ${BLUE}$LOG_FILE${NC}"
+  echo -e "${GREEN}✓ Log:${NC} All installation operations have been logged to ${BLUE}$LOG_FILE${NC}"
   echo ""
   log_message "Installation process completed successfully"
 }
@@ -522,105 +747,144 @@ install() {
 configure_with_admin() {
   if [ "$ACTION" = "install" ]; then
     echo ""
-    echo -e "${BLUE}=== Automatic Configuration ===${NC}"
+    echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║          ${GREEN}Automatic Configuration${BLUE}             ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
     echo -e "Would you like to configure AWS Secrets Manager now? This will:"
-    echo -e "  1. Setup required environment variables"
-    echo -e "  2. Create or access your AWS Secrets Manager secret"
-    echo -e "  3. Test your AWS credentials and permissions"
+    echo -e "  ${YELLOW}•${NC} Setup required environment variables"
+    echo -e "  ${YELLOW}•${NC} Create or access your AWS Secrets Manager secret"
+    echo -e "  ${YELLOW}•${NC} Test your AWS credentials and permissions"
     echo ""
-    echo -n "Configure Shh now? [Y/n/x]: "
-    read -r CONFIGURE_NOW
     
-    # Handle exit option
-    handle_user_input "$CONFIGURE_NOW"
+    # In automated mode, automatically proceed with configuration
+    if [ "$AUTOMATED" = true ]; then
+      CONFIGURE_NOW="Y"
+      echo -e "${GREEN}✓ Proceeding with automatic configuration...${NC}"
+    else
+      # In non-interactive mode or regular mode, ask
+      read_input "Configure Shh now? [Y/n/x]: " "Y" "CONFIGURE_NOW"
+      
+      # Handle exit option
+      handle_user_input "$CONFIGURE_NOW"
+    fi
     
     if [[ ! "$CONFIGURE_NOW" =~ ^[Nn]$ ]]; then
       # First run shh-env directly for environment configuration
-      echo -e "${GREEN}Setting up environment variables...${NC}"
+      echo -e "${GREEN}✓ Setting up environment variables...${NC}"
       # Use the scripts from the installation directory, not the system paths
       if [ -x "$INSTALL_DIR/shh-env" ]; then
-        "$INSTALL_DIR/shh-env" --menu
+        if [ "$AUTOMATED" = true ]; then
+          # In automated mode, use --reset to set defaults without interaction
+          "$INSTALL_DIR/shh-env" --reset
+          echo -e "${GREEN}✓ Environment variables set to defaults${NC}"
+        else
+          "$INSTALL_DIR/shh-env" --menu
+        fi
       else
-        echo -e "${RED}Error: Could not find shh-env in installation directory.${NC}"
+        echo -e "${RED}✗ Error: Could not find shh-env in installation directory.${NC}"
+        echo -e "  Current INSTALL_DIR is: ${BLUE}$INSTALL_DIR${NC}"
         return 1
       fi
       
       # Now ask if they want to also create/check their secret
       echo ""
-      echo -n "Would you like to verify/create your AWS Secret? [Y/n/x]: "
-      read -r VERIFY_SECRET
       
-      # Handle exit option
-      handle_user_input "$VERIFY_SECRET"
+      # In automated mode, automatically proceed with secret creation
+      if [ "$AUTOMATED" = true ]; then
+        VERIFY_SECRET="Y"
+        echo -e "${GREEN}✓ Proceeding with automatic secret verification/creation...${NC}"
+      else
+        # In non-interactive mode or regular mode, ask
+        read_input "Would you like to verify/create your AWS Secret? [Y/n/x]: " "Y" "VERIFY_SECRET"
+        
+        # Handle exit option
+        handle_user_input "$VERIFY_SECRET"
+      fi
       
       if [[ ! "$VERIFY_SECRET" =~ ^[Nn]$ ]]; then
         # Run shh-admin with create flag
-        echo -e "${GREEN}Running shh-admin to verify/create AWS Secret...${NC}"
+        echo -e "${GREEN}✓ Running shh-admin to verify/create AWS Secret...${NC}"
         if [ -x "$INSTALL_DIR/shh-admin" ]; then
           "$INSTALL_DIR/shh-admin" -c
         else
-          echo -e "${RED}Error: Could not find shh-admin in installation directory.${NC}"
+          echo -e "${RED}✗ Error: Could not find shh-admin in installation directory.${NC}"
+          echo -e "  Current INSTALL_DIR is: ${BLUE}$INSTALL_DIR${NC}"
           return 1
         fi
       else
-        echo -e "${YELLOW}You can run ${BLUE}shh-admin${NC} ${YELLOW}at any time to configure your AWS Secret.${NC}"
+        echo -e "${YELLOW}⚠️ You can run ${BLUE}shh-admin${NC} ${YELLOW}at any time to configure your AWS Secret.${NC}"
       fi
     else
-      echo -e "${YELLOW}You can run ${BLUE}shh-env${NC} and ${BLUE}shh-admin${NC} ${YELLOW}at any time to configure Shh.${NC}"
+      echo -e "${YELLOW}⚠️ You can run ${BLUE}shh-env${NC} and ${BLUE}shh-admin${NC} ${YELLOW}at any time to configure Shh.${NC}"
     fi
   fi
+  
+  # Final message to help users get started
+  echo ""
+  echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║             ${GREEN}What's Next?${BLUE}                      ║${NC}"
+  echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  echo -e "Now that Shh is installed, here's how to get started:"
+  echo ""
+  echo -e "  ${YELLOW}1.${NC} Run ${BLUE}shh-admin${NC} to manage your AWS Secrets"
+  echo -e "  ${YELLOW}2.${NC} Use ${BLUE}shh-add${NC} to add SSH keys to AWS Secrets Manager"
+  echo -e "  ${YELLOW}3.${NC} Connect to servers with ${BLUE}shh user@host${NC}"
+  echo ""
+  echo -e "For more information, see the documentation with:"
+  echo -e "  ${BLUE}curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/README.md | less${NC}"
+  echo ""
 }
-
-# Parse command line arguments
-if [ $# -gt 0 ]; then
-  case "$1" in
-    install)
-      ACTION="install"
-      ;;
-    uninstall)
-      ACTION="uninstall"
-      ;;
-    help|--help|-h)
-      show_usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown command: $1"
-      show_usage
-      exit 1
-      ;;
-  esac
-fi
 
 # Run the requested action
 print_banner
 
 if [ "$ACTION" = "install" ]; then
   # Don't log this message as it might trigger sudo request
-  echo -e "${BLUE}Preparing installation process...${NC}"
+  if [ "$AUTOMATED" = true ]; then
+    echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║       ${GREEN}Automated Installation Started${BLUE}         ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  else
+    echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║        ${GREEN}Preparing Installation Process${BLUE}       ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+  fi
   install
 elif [ "$ACTION" = "uninstall" ]; then
   # Don't log this message as it might trigger sudo request
-  echo -e "${BLUE}Preparing uninstallation process...${NC}"
-  echo -e "${YELLOW}Warning: This will remove Shh from your system.${NC}"
-  echo -e "You can review the script before continuing: ${BLUE}curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | less${NC}"
-  echo -e "Enter 'x' to exit the script"
-  echo -n "Are you sure you want to continue? [y/N/x]: "
-  read -r CONFIRM
-  
-  # Handle exit option
-  handle_user_input "$CONFIRM"
-  
-  if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+  if [ "$AUTOMATED" = true ]; then
+    echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║      ${RED}Automated Uninstallation Started${BLUE}       ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
     uninstall
-    echo -e "${GREEN}Shh has been successfully uninstalled!${NC}"
-    echo -e "Log file remains at ${BLUE}$LOG_FILE${NC}"
+    echo -e "${GREEN}✓ Shh has been successfully uninstalled!${NC}"
+    echo -e "  Log file remains at ${BLUE}$LOG_FILE${NC}"
   else
-    echo -e "${YELLOW}Uninstallation canceled.${NC}"
+    echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║       ${RED}Preparing Uninstallation Process${BLUE}      ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+    echo -e "${RED}⚠️ Warning:${NC} This will remove Shh from your system."
+    echo -e "You can review the script before continuing: ${BLUE}curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | less${NC}"
+    
+    # In non-interactive mode, default to No (safer)
+    read_input "Are you sure you want to continue with uninstallation? [y/N/x]: " "N" "CONFIRM"
+    
+    # Handle exit option
+    handle_user_input "$CONFIRM"
+    
+    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+      uninstall
+      echo -e "${GREEN}✓ Shh has been successfully uninstalled!${NC}"
+      echo -e "  Log file remains at ${BLUE}$LOG_FILE${NC}"
+    else
+      echo -e "${YELLOW}⚠️ Uninstallation canceled.${NC}"
+    fi
   fi
 fi
 
 # Run configuration if this was an installation
-configure_with_admin
+if [ "$ACTION" = "install" ]; then
+  configure_with_admin
+fi
 
 exit 0
