@@ -167,12 +167,15 @@ log_message() {
   local user=$(whoami)
   local host=$(hostname)
   local message="$1"
+  local silent=${2:-false}  # New parameter to control console output
   
   # Create log message
   local log_entry="[$timestamp] [$user@$host] [$ACTION] $message"
   
   # Echo to console if not silent
+  if [ "$silent" != "true" ]; then
   echo "$log_entry"
+  fi
   
   # Quietly handle log file operations without notification messages
   
@@ -180,11 +183,11 @@ log_message() {
   if [ ! -f "$LOG_FILE" ]; then
     if [ ! -w "$(dirname "$LOG_FILE")" ]; then
       # Quietly use sudo without notifications
-      sudo touch "$LOG_FILE" 2>/dev/null
-      sudo chmod 644 "$LOG_FILE" 2>/dev/null
+      sudo touch "$LOG_FILE" >/dev/null 2>&1
+      sudo chmod 644 "$LOG_FILE" >/dev/null 2>&1
     else
-      touch "$LOG_FILE" 2>/dev/null
-      chmod 644 "$LOG_FILE" 2>/dev/null
+      touch "$LOG_FILE" >/dev/null 2>&1
+      chmod 644 "$LOG_FILE" >/dev/null 2>&1
     fi
   fi
   
@@ -195,6 +198,33 @@ log_message() {
     # Quietly use sudo without notifications
     echo "$log_entry" | sudo tee -a "$LOG_FILE" >/dev/null 2>&1
   fi
+}
+
+# Function to run commands with sudo silently
+run_sudo_silent() {
+  local cmd="$1"
+  local msg="$2"
+  local error_msg="$3"
+  
+  # Log the intent (silently to log file only)
+  log_message "Running with sudo: $cmd" true
+  
+  # Show user-friendly message instead of sudo output
+  if [ -n "$msg" ]; then
+    echo -e "${GREEN}$msg${NC}"
+  fi
+  
+  # Run the command with sudo, redirecting all output to /dev/null
+  if ! sudo bash -c "$cmd" >/dev/null 2>&1; then
+    if [ -n "$error_msg" ]; then
+      echo -e "${RED}$error_msg${NC}"
+    else
+      echo -e "${RED}Error: Command failed: $cmd${NC}"
+    fi
+    return 1
+  fi
+  
+  return 0
 }
 
 # Function to check for required commands
@@ -242,8 +272,8 @@ clone_repo() {
     log_message "Using SSH clone method (specified via command line)"
     echo -e "${GREEN}✓ Using SSH to clone repository (as requested)...${NC}"
     if git clone "$SSH_REPO_URL" "$TEMP_DIR/shh"; then
-      log_message "Repository cloned successfully using SSH!"
-      return 0
+    log_message "Repository cloned successfully using SSH!"
+    return 0
     else
       log_message "Error: Failed to clone repository using SSH."
       echo -e "${RED}✗ SSH clone failed.${NC}"
@@ -332,11 +362,11 @@ clone_repo() {
       if [[ ! "$TRY_HTTPS" =~ ^[Nn]$ ]]; then
         log_message "Falling back to HTTPS after SSH failure"
         echo -e "${YELLOW}⚠️ Trying HTTPS clone instead...${NC}"
-        if git clone "$HTTPS_REPO_URL" "$TEMP_DIR/shh"; then
-          log_message "Repository cloned successfully using HTTPS!"
-          return 0
-        else
-          log_message "Error: Failed to clone repository using either SSH or HTTPS."
+  if git clone "$HTTPS_REPO_URL" "$TEMP_DIR/shh"; then
+    log_message "Repository cloned successfully using HTTPS!"
+    return 0
+  else
+    log_message "Error: Failed to clone repository using either SSH or HTTPS."
           echo -e "${RED}✗ Clone failed with both SSH and HTTPS.${NC}"
           echo -e "  Please check your network connection and repository access."
           exit 1
@@ -361,14 +391,20 @@ clone_repo() {
 create_install_directory() {
   if [ ! -d "$INSTALL_DIR" ]; then
     if [ ! -w "$(dirname "$INSTALL_DIR")" ]; then
-      log_message "Creating installation directory $INSTALL_DIR"
-      # Quietly use sudo without notification
-      if ! sudo mkdir -p "$INSTALL_DIR" 2>/dev/null; then
-        log_message "Error: Failed to create installation directory."
+      # Silently create directory with sudo, without notifications
+      if ! run_sudo_silent "mkdir -p '$INSTALL_DIR'" \
+                          "Creating installation directory..." \
+                          "Failed to create installation directory."; then
         exit 1
       fi
-      # Change ownership to make it writable
-      sudo chown "$(id -u):$(id -g)" "$INSTALL_DIR" 2>/dev/null
+      
+      # Change ownership silently to make it writable
+      if ! run_sudo_silent "chown $(id -u):$(id -g) '$INSTALL_DIR'" \
+                           "" \
+                           "Failed to set directory permissions."; then
+        exit 1
+      fi
+      
       log_message "Created installation directory with sudo"
     else
       mkdir -p "$INSTALL_DIR"
@@ -409,8 +445,8 @@ create_symlinks() {
   local use_sudo=false
   if [ ! -w "$BIN_DIR" ]; then
     use_sudo=true
-    log_message "Requesting sudo permissions to create symlinks in $BIN_DIR (current user lacks write permission)"
-    echo -e "${YELLOW}Sudo required:${NC} Creating symlinks in system directory ${PINK}$BIN_DIR${NC}"
+    log_message "Need sudo permissions for $BIN_DIR (without write permission)"
+    echo -e "${GREEN}Creating symlinks in system directory...${NC}"
   fi
   
   # Create symlinks for each executable
@@ -419,26 +455,27 @@ create_symlinks() {
       # Remove existing symlink or file if present
       if [ -L "$BIN_DIR/$cmd" ] || [ -f "$BIN_DIR/$cmd" ]; then
         if $use_sudo; then
-          sudo rm -f "$BIN_DIR/$cmd"
+          run_sudo_silent "rm -f '$BIN_DIR/$cmd'" "" "Failed to remove existing symlink for $cmd."
         else
           rm -f "$BIN_DIR/$cmd"
         fi
-        log_message "Removed existing $BIN_DIR/$cmd"
+        log_message "Removed existing $BIN_DIR/$cmd" true
       fi
       
       # Create new symlink
       if $use_sudo; then
-        if ! sudo ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
-          log_message "Error: Failed to create symlink for $cmd."
+        if ! run_sudo_silent "ln -s '$INSTALL_DIR/$cmd' '$BIN_DIR/$cmd'" \
+                            "Creating symlink for $cmd..." \
+                            "Failed to create symlink for $cmd."; then
           exit 1
         fi
       else
         if ! ln -s "$INSTALL_DIR/$cmd" "$BIN_DIR/$cmd"; then
-          log_message "Error: Failed to create symlink for $cmd."
+          echo -e "${RED}Error: Failed to create symlink for $cmd.${NC}"
           exit 1
         fi
       fi
-      log_message "Created symlink for $cmd"
+      log_message "Created symlink for $cmd" true
     else
       log_message "Warning: Cannot create symlink for $cmd, source file not found"
     fi
