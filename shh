@@ -3,37 +3,65 @@
 # Exit on errors
 set -e
 
+# ANSI color codes for pretty output
+PINK="\033[38;5;206m"     # Hot pink for primary headings
+GREEN="\033[38;5;46m"     # Bright green for success messages
+YELLOW="\033[38;5;220m"   # Yellow for warnings and important info
+BLUE="\033[38;5;39m"      # Blue for option categories
+CYAN="\033[38;5;87m"      # Cyan for options
+WHITE="\033[97m"          # White for normal text
+ORANGE="\033[38;5;208m"   # Orange for parameter names
+GRAY="\033[38;5;246m"     # Gray for descriptions
+RED="\033[38;5;196m"      # Bright red for errors
+BOLD="\033[1m"            # Bold text
+UNDERLINE="\033[4m"       # Underlined text
+RESET="\033[0m"           # Reset all formatting
+
 # Get the directory of the current script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Function to display usage
 usage() {
-  echo "Usage: $(basename "$0") [options] <user@host> [region]"
+  echo -e "${PINK}${BOLD}╔════════════════════════════════════════════════╗${RESET}"
+  echo -e "${PINK}${BOLD}║           Shh - Secure SSH Client              ║${RESET}"
+  echo -e "${PINK}${BOLD}╚════════════════════════════════════════════════╝${RESET}"
   echo ""
-  echo "Arguments:"
-  echo "  user@host      Remote SSH destination"
-  echo "  region         AWS region (uses SHH_REGION or AWS_REGION environment variable if not specified)"
+  echo -e "${UNDERLINE}${BOLD}USAGE:${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ${ORANGE}[options] ${ORANGE}<user@host> ${ORANGE}[region]${RESET}"
   echo ""
-  echo "Options:"
-  echo "  -i <key-name>  Specify the SSH key name stored in AWS Secrets Manager"
-  echo "                 (default: uses '<username>_ed25519' from user@host)"
-  echo "  --debug        Enable verbose debugging output"
-  echo "  --env          Manage environment variables with shh-env"
-  echo "  --help|-h      Display this help message"
+  echo -e "${UNDERLINE}${BOLD}ARGUMENTS:${RESET}"
+  echo -e "  ${ORANGE}user@host${RESET}      ${WHITE}Remote SSH destination${RESET}"
+  echo -e "  ${ORANGE}region${RESET}         ${WHITE}AWS region (uses ${CYAN}SHH_REGION${WHITE} or ${CYAN}AWS_REGION${WHITE} if not specified)${RESET}"
   echo ""
-  echo "Shh supports all standard SSH options and flags."
-  echo "These are passed directly to the underlying SSH command."
+  echo -e "${BLUE}${BOLD}SHH OPTIONS:${RESET}"
+  echo -e "  ${CYAN}-i <key-name>${RESET}  ${WHITE}Specify the SSH key name stored in AWS Secrets Manager${RESET}"
+  echo -e "                 ${GRAY}(default: uses '<username>_ed25519' from user@host)${RESET}"
+  echo -e "  ${CYAN}--debug${RESET}        ${WHITE}Enable verbose debugging output${RESET}"
+  echo -e "  ${CYAN}--env${RESET}          ${WHITE}Manage environment variables with shh-env${RESET}"
+  echo -e "  ${CYAN}--help${RESET}|${CYAN}-h${RESET}      ${WHITE}Display this help message${RESET}"
   echo ""
-  echo "Environment Setup:"
-  echo "  Run 'shh-env' to configure your environment variables"
-  echo "  Run 'shh-admin' to manage your AWS Secrets Manager secrets"
+  echo -e "${YELLOW}${BOLD}IMPORTANT:${RESET} ${WHITE}Shh supports all standard SSH options and flags.${RESET}"
+  echo -e "${WHITE}These are passed directly to the underlying SSH command:${RESET}"
+  echo -e "  ${GRAY}# Standard SSH options are fully supported${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") -p 2222 -X -o ConnectTimeout=10 user@hostname${RESET}"
+  echo -e ""
+  echo -e "${WHITE}Use with other tools that expect SSH:${RESET}"
+  echo -e "  ${GRAY}# For SCP:${RESET}"
+  echo -e "  ${WHITE}scp -S shh localfile user@host:remotepath${RESET}"
+  echo -e ""
+  echo -e "  ${GRAY}# For RSYNC:${RESET}"
+  echo -e "  ${WHITE}rsync -e \"shh\" localfile user@host:remotepath${RESET}"
+  echo ""
+  echo -e "${UNDERLINE}${BOLD}ENVIRONMENT SETUP:${RESET}"
+  echo -e "  ${WHITE}Run '${CYAN}shh-env${WHITE}' to configure your environment variables${RESET}"
+  echo -e "  ${WHITE}Run '${CYAN}shh-admin${WHITE}' to manage your AWS Secrets Manager secrets${RESET}"
   exit 1
 }
 
 # Function for debug logging
 debug_log() {
   if [ "$DEBUG_MODE" = true ]; then
-    echo "[DEBUG] $1"
+    echo -e "${GRAY}[DEBUG] $1${RESET}"
   fi
 }
 
@@ -41,7 +69,7 @@ debug_log() {
 check_dependencies() {
   for cmd in aws jq base64 ssh-add ssh-agent grep; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
-      echo "Error: Required command '$cmd' not found. Please install it." >&2
+      echo -e "${RED}${BOLD}Error:${RESET} Required command '${CYAN}$cmd${RESET}' not found. Please install it." >&2
       exit 1
     fi
   done
@@ -49,11 +77,11 @@ check_dependencies() {
 
 # Function to manage environment
 manage_environment() {
-  echo "Managing SHH environment variables..."
+  echo -e "${BLUE}${BOLD}Managing SHH environment variables...${RESET}"
   
   # Check if shh-env exists and is executable
   if [ ! -x "$SCRIPT_DIR/shh-env" ]; then
-    echo "Error: shh-env script not found or not executable."
+    echo -e "${RED}${BOLD}Error:${RESET} shh-env script not found or not executable."
     return 1
   fi
   
@@ -98,16 +126,16 @@ check_shh_environment() {
   
   # If any required variables are missing
   if [ ${#missing_vars[@]} -gt 0 ]; then
-    echo "Error: Required environment variable(s) not set: ${missing_vars[*]}" >&2
-    echo "Would you like to configure these variables now using shh-admin? (y/n): " >&2
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Required environment variable(s) not set: ${ORANGE}${missing_vars[*]}${RESET}" >&2
+    echo -e "Would you like to configure these variables now using shh-admin? (y/n): " >&2
     read -r CONFIGURE
     
     if [[ "$CONFIGURE" =~ ^[Yy]$ ]]; then
-      echo "Launching shh-admin environment configuration..." >&2
+      echo -e "${BLUE}Launching shh-admin environment configuration...${RESET}" >&2
       "$SCRIPT_DIR/shh-admin" --env
       exit 0
     else
-      echo "Please run 'shh-env' or 'shh-admin --env' to configure your environment." >&2
+      echo -e "Please run '${CYAN}shh-env${RESET}' or '${CYAN}shh-admin --env${RESET}' to configure your environment." >&2
       exit 1
     fi
   fi
@@ -123,18 +151,43 @@ SSH_OPTS=()
 # Add default SSH options
 SSH_OPTS+=("-o" "StrictHostKeyChecking=accept-new")
 
-# List of SSH options that take an argument
+# Complete list of SSH options that take an argument
 SSH_OPTS_WITH_ARG=(
   "-b" "-c" "-D" "-E" "-e" "-F" "-I" "-i" "-J" "-L" "-l" "-m" "-O" "-o" "-p" "-Q" 
-  "-R" "-S" "-W" "-w" "-4" "-6" "-B" "-C" "-c" "-f" "-G" "-g" "-K" "-k" "-M" "-N" 
-  "-n" "-q" "-s" "-T" "-t" "-V" "-v" "-X" "-x" "-Y" "-y"
+  "-R" "-S" "-W" "-w"
+)
+
+# List of single-letter SSH flags that don't take arguments
+SSH_FLAGS_NO_ARG=(
+  "-4" "-6" "-A" "-a" "-C" "-f" "-G" "-g" "-K" "-k" "-M" "-N" "-n" "-q" "-s" "-T" 
+  "-t" "-V" "-v" "-X" "-x" "-Y" "-y"
 )
 
 # Function to check if an option requires an argument
 requires_argument() {
   local option="$1"
+  local first_char="${option:0:2}"
+  
+  # Check for extended options like -oSomething
+  if [ ${#option} -gt 2 ] && [[ " ${SSH_OPTS_WITH_ARG[*]} " == *" ${first_char} "* ]]; then
+    return 1  # Option is combined with its argument
+  fi
+  
+  # Check for regular options that need arguments
   for opt in "${SSH_OPTS_WITH_ARG[@]}"; do
     if [[ "$option" == "$opt" ]]; then
+      return 0  # Requires separate argument
+    fi
+  done
+  
+  return 1  # Does not require argument
+}
+
+# Function to check if option is a single flag
+is_single_flag() {
+  local option="$1"
+  for flag in "${SSH_FLAGS_NO_ARG[@]}"; do
+    if [[ "$option" == "$flag" ]]; then
       return 0
     fi
   done
@@ -159,15 +212,48 @@ while [[ $# -gt 0 ]]; do
       ;;
     -i)
       if [[ $# -lt 2 ]]; then
-        echo "Error: -i option requires an argument" >&2
+        echo -e "${RED}${BOLD}Error:${RESET} -i option requires an argument" >&2
         usage
       fi
       KEY_NAME="$2"
       shift 2
       ;;
+    -o*)
+      # Special handling for SSH options with equals sign
+      if [[ "$1" == -o*=* ]]; then
+        # -oKey=Value format
+        SSH_OPTS+=("$1")
+        shift
+      elif [[ "$1" == "-o" ]] && [[ $# -gt 1 ]]; then
+        # -o Key=Value format
+        SSH_OPTS+=("$1" "$2")
+        shift 2
+      else
+        # Invalid -o usage
+        echo -e "${RED}${BOLD}Error:${RESET} -o option requires an argument" >&2
+        usage
+      fi
+      ;;
     -*)
-      # Handle SSH options that take arguments
-      if requires_argument "$1" && [[ $# -gt 1 ]]; then
+      # Check if this is a combined option (e.g., -4Cn)
+      if [[ ${#1} -gt 2 ]] && [[ "${1:0:1}" == "-" ]] && [[ "${1:1:1}" != "-" ]]; then
+        # It's a combined option, split into individual flags
+        debug_log "Splitting combined option: $1"
+        options_string="${1:1}"  # Remove leading dash
+        for (( i=0; i<${#options_string}; i++ )); do
+          flag="-${options_string:$i:1}"
+          if is_single_flag "$flag"; then
+            SSH_OPTS+=("$flag")
+          else
+            # Unknown flag or one that requires an argument
+            echo -e "${YELLOW}${BOLD}Warning:${RESET} Passing combined option '$1' as is" >&2
+            SSH_OPTS+=("$1")
+            break
+          fi
+        done
+        shift
+      elif requires_argument "$1" && [[ $# -gt 1 ]]; then
+        # Handle SSH options that take arguments
         SSH_OPTS+=("$1" "$2")
         shift 2
       else
@@ -193,7 +279,7 @@ done
 
 # Validate required arguments
 if [ -z "$USER_HOST" ]; then
-  echo "Error: Missing user@host argument." >&2
+  echo -e "${RED}${BOLD}Error:${RESET} Missing user@host argument." >&2
   usage
 fi
 
@@ -209,8 +295,8 @@ if [ -z "$REGION" ]; then
   elif [ -n "${AWS_DEFAULT_REGION}" ]; then
     REGION="${AWS_DEFAULT_REGION}"
   else
-    echo "Error: AWS region not specified and no region environment variable set." >&2
-    echo "Please specify a region or run 'shh-env' to configure your environment." >&2
+    echo -e "${RED}${BOLD}Error:${RESET} AWS region not specified and no region environment variable set." >&2
+    echo -e "Please specify a region or run '${CYAN}shh-env${RESET}' to configure your environment." >&2
     exit 1
   fi
 fi
@@ -243,21 +329,21 @@ debug_log "Retrieving key '$KEY_NAME' from secret '${SHH_SECRETS}' in region '$R
 
 # Retrieve the SSH key from AWS Secrets Manager
 SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "${SHH_SECRETS}" --region "$REGION" --query SecretString --output text 2>/dev/null) || {
-  echo "Error: Failed to retrieve secret '${SHH_SECRETS}' from AWS Secrets Manager in region '$REGION'!" >&2
-  echo "Please check your AWS credentials and secret configuration." >&2
-  echo "Run 'shh-admin' to manage your AWS secrets." >&2
+  echo -e "${RED}${BOLD}Error:${RESET} Failed to retrieve secret '${CYAN}${SHH_SECRETS}${RESET}' from AWS Secrets Manager in region '${CYAN}$REGION${RESET}'!" >&2
+  echo -e "Please check your AWS credentials and secret configuration." >&2
+  echo -e "Run '${CYAN}shh-admin${RESET}' to manage your AWS secrets." >&2
   exit 1
 }
 
 # Extract private key using jq (base64 encoded)
 SSH_PRIVATE_KEY_B64=$(echo "$SECRET_JSON" | jq -r --arg key "$KEY_NAME" '.[$key] // empty')
 if [ -z "$SSH_PRIVATE_KEY_B64" ]; then
-  echo "Error: Key '$KEY_NAME' not found in secret '${SHH_SECRETS}'!" >&2
+  echo -e "${RED}${BOLD}Error:${RESET} Key '${CYAN}$KEY_NAME${RESET}' not found in secret '${CYAN}${SHH_SECRETS}${RESET}'!" >&2
   if [ "$DEBUG_MODE" = true ]; then
-    echo "Available keys:" >&2
+    echo -e "${BLUE}${BOLD}Available keys:${RESET}" >&2
     echo "$SECRET_JSON" | jq -r 'keys[]' | grep -v "\.pub$" | grep -v "\.meta$" | grep -v "\.fp$" | sort >&2
   fi
-  echo "Use 'shh-admin --list' to see available keys." >&2
+  echo -e "Use '${CYAN}shh-admin --list${RESET}' to see available keys." >&2
   exit 1
 fi
 
@@ -289,12 +375,12 @@ if echo "$SECRET_JSON" | jq -e --arg key "$META_KEY" 'has($key)' >/dev/null; the
     VERSION=$(echo "$META_JSON" | jq -r '.version // "1"')
     ROTATION=$(echo "$META_JSON" | jq -r '.rotation_recommended // "unknown"')
     
-    echo "Key information:"
-    echo "- Type: $KEY_TYPE"
-    echo "- Size: $KEY_SIZE"
-    echo "- Created: $CREATED"
-    echo "- Version: $VERSION"
-    echo "- Rotation due: $ROTATION"
+    echo -e "${BLUE}${BOLD}Key information:${RESET}"
+    echo -e "- Type: ${CYAN}$KEY_TYPE${RESET}"
+    echo -e "- Size: ${CYAN}$KEY_SIZE${RESET}"
+    echo -e "- Created: ${CYAN}$CREATED${RESET}"
+    echo -e "- Version: ${CYAN}$VERSION${RESET}"
+    echo -e "- Rotation due: ${CYAN}$ROTATION${RESET}"
   fi
 else
   debug_log "No metadata found for key '$KEY_NAME'"
@@ -327,6 +413,7 @@ fi
 if [ "$IS_KEY_LOADED" = false ]; then
   # Add the key to ssh-agent directly from stdin without writing to a file
   if [ "$DEBUG_MODE" = true ]; then
+    echo -e "${BLUE}${BOLD}Adding key to SSH agent...${RESET}"
     echo "$SSH_PRIVATE_KEY" | ssh-add -
   else
     echo "$SSH_PRIVATE_KEY" | ssh-add - 2>/dev/null
@@ -336,6 +423,12 @@ fi
 # SSH into the host using the loaded key
 debug_log "Connecting to $USER_HOST using key '$KEY_NAME'..."
 debug_log "SSH options: ${SSH_OPTS[*]}"
+
+if [ "$DEBUG_MODE" = true ]; then
+  echo -e "${GREEN}${BOLD}Connecting to${RESET} ${CYAN}$USER_HOST${RESET} ${GREEN}using key${RESET} ${CYAN}$KEY_NAME${RESET}"
+fi
+
+# Execute the SSH command with all options
 ssh "${SSH_OPTS[@]}" "$USER_HOST"
 
 exit 0
