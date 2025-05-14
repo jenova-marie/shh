@@ -4,17 +4,27 @@
 set -e
 
 # ANSI color codes for pretty output
-PINK="\033[38;5;206m"     # Hot pink for primary headings
+PINK="\033[38;5;206m"     # Hot pink for primary headings and parameter names
 GREEN="\033[38;5;46m"     # Bright green for success messages
 YELLOW="\033[38;5;220m"   # Yellow for warnings and important info
 BLUE="\033[38;5;39m"      # Blue for option categories
 CYAN="\033[38;5;87m"      # Cyan for options
 WHITE="\033[97m"          # White for normal text
-ORANGE="\033[38;5;208m"   # Orange for parameter names
 GRAY="\033[38;5;246m"     # Gray for descriptions
+RED="\033[38;5;196m"      # Bright red for errors
+PURPLE="\033[38;5;135m"   # Purple for special features
 BOLD="\033[1m"            # Bold text
 UNDERLINE="\033[4m"       # Underlined text
 RESET="\033[0m"           # Reset all formatting
+
+# Unicode symbols for indicators
+CHECK_MARK="✓"
+WARNING="⚠️"
+ERROR_MARK="✗"
+INFO_MARK="ℹ️"
+ARROW="→"
+LOCK="🔒"
+KEY="🔑"
 
 # Region priority: Command line > SHH_REGION > AWS_REGION > AWS_DEFAULT_REGION > default
 DEFAULT_REGION=${SHH_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-"us-east-2"}}}
@@ -29,34 +39,102 @@ KEY_BITS=4096      # Default bits for RSA keys
 KEY_ROUNDS=100     # Default KDF rounds
 SHRED_KEY=false    # Default to not shredding the key
 TEMP_DIR=""        # Will be set later if needed
+USER_SCAN_MODE=false # New flag for --user mode
+
+# Function to print a boxed header
+print_header() {
+  local title="$1"
+  local width=70
+  local title_len=${#title}
+  local padding=$(( (width - title_len - 2) / 2 ))
+  local extra_space=$(( (width - title_len - 2) % 2 ))
+  
+  echo -e "${PINK}${BOLD}╔════════════════════════════════════════════════════════════════════╗${RESET}"
+  printf "${PINK}${BOLD}║%*s%s%*s║${RESET}\n" $((padding + extra_space)) "" "$title" $padding ""
+  echo -e "${PINK}${BOLD}╚════════════════════════════════════════════════════════════════════╝${RESET}"
+}
+
+# Function to display a status message
+print_status() {
+  local type="$1"
+  local message="$2"
+  
+  case "$type" in
+    success)
+      echo -e "${GREEN}${BOLD}${CHECK_MARK} ${WHITE}${message}${RESET}"
+      ;;
+    warning)
+      echo -e "${YELLOW}${BOLD}${WARNING} ${WHITE}${message}${RESET}"
+      ;;
+    error)
+      echo -e "${RED}${BOLD}${ERROR_MARK} ${WHITE}${message}${RESET}"
+      ;;
+    info)
+      echo -e "${BLUE}${BOLD}${INFO_MARK} ${WHITE}${message}${RESET}"
+      ;;
+    step)
+      echo -e "${PURPLE}${BOLD}${ARROW} ${WHITE}${message}${RESET}"
+      ;;
+    secure)
+      echo -e "${GREEN}${BOLD}${LOCK} ${WHITE}${message}${RESET}"
+      ;;
+    key)
+      echo -e "${PINK}${BOLD}${KEY} ${WHITE}${message}${RESET}"
+      ;;
+  esac
+}
+
+# Function to print a section header
+print_section() {
+  local title="$1"
+  local line_fill=$(printf "%*s" 50 "" | tr ' ' '─')
+  echo -e "\n${BLUE}${BOLD}┌─ ${title} ${line_fill}${RESET}"
+}
+
+# Function to prompt for user input with colors
+prompt_for_input() {
+  local prompt_message="$1"
+  local variable_name="$2"
+  local default_value="${3:-}" # Optional default value
+
+  echo -en "${PINK}${BOLD}${prompt_message}${RESET}${WHITE} "
+  read -r user_input
+
+  if [ -z "$user_input" ] && [ -n "$default_value" ]; then
+    eval "$variable_name=\\"$default_value\\""
+    echo -e "${GRAY}(used default: $default_value)${RESET}"
+  else
+    eval "$variable_name=\\"$user_input\\""
+  fi
+}
 
 # Function to display usage
 usage() {
-  echo -e "${PINK}${BOLD}╔════════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${PINK}${BOLD}║                 Shh SSH Key Manager                        ║${RESET}"
-  echo -e "${PINK}${BOLD}╚════════════════════════════════════════════════════════════╝${RESET}"
+  print_header "Shh SSH Key Manager"
   echo ""
   echo -e "${UNDERLINE}${BOLD}USAGE:${RESET}"
-  echo -e "  ${WHITE}$(basename "$0") ${CYAN}[options] ${ORANGE}<file-path> ${ORANGE}[property-name] ${ORANGE}[region]${RESET}"
-  echo -e "  ${WHITE}$(basename "$0") ${CYAN}--generate ${CYAN}[options] ${ORANGE}[property-name] ${ORANGE}[region]${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ${CYAN}[options] ${PINK}<file-path> ${PINK}[property-name] ${PINK}[region]${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ${CYAN}--generate ${CYAN}[options] ${PINK}[property-name] ${PINK}[region]${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ${CYAN}--user${RESET}"
   echo ""
   echo -e "${UNDERLINE}${BOLD}ARGUMENTS:${RESET}"
-  echo -e "  ${ORANGE}file-path${RESET}      ${WHITE}Path to the SSH key file (not needed with --generate)${RESET}"
-  echo -e "  ${ORANGE}property-name${RESET}  ${WHITE}Name to store the key as (defaults to filename or hostname with generate)${RESET}"
-  echo -e "  ${ORANGE}region${RESET}         ${WHITE}AWS region (defaults to ${RESET}${YELLOW}$DEFAULT_REGION${RESET}${WHITE})${RESET}"
+  echo -e "  ${PINK}file-path${RESET}      ${WHITE}Path to the SSH key file (not needed with --generate)${RESET}"
+  echo -e "  ${PINK}property-name${RESET}  ${WHITE}Name to store the key as (defaults to filename or hostname with generate)${RESET}"
+  echo -e "  ${PINK}region${RESET}         ${WHITE}AWS region (defaults to ${RESET}${YELLOW}$DEFAULT_REGION${RESET}${WHITE})${RESET}"
   echo ""
   echo -e "${BLUE}${BOLD}KEY GENERATION OPTIONS:${RESET}"
   echo -e "  ${CYAN}--generate${RESET}     ${WHITE}Generate a new SSH key instead of uploading an existing one${RESET}"
-  echo -e "  ${CYAN}--type ${ORANGE}TYPE${RESET}    ${WHITE}Key type: ${GREEN}ed25519${RESET} (default), ${GREEN}rsa${RESET}, ${GREEN}ecdsa${RESET}, ${GREEN}dsa${RESET}${RESET}"
-  echo -e "  ${CYAN}--bits ${ORANGE}BITS${RESET}    ${WHITE}Key size in bits (for RSA keys, default: ${RESET}${YELLOW}4096${RESET}${WHITE})${RESET}"
-  echo -e "  ${CYAN}--rounds ${ORANGE}N${RESET}     ${WHITE}KDF rounds for key generation (default: ${RESET}${YELLOW}100${RESET}${WHITE})${RESET}"
-  echo -e "  ${CYAN}--comment ${ORANGE}TXT${RESET}  ${WHITE}Key comment (default: ${RESET}${YELLOW}username@hostname${RESET}${WHITE})${RESET}"
-  echo -e "  ${CYAN}--path ${ORANGE}PATH${RESET}    ${WHITE}Path to save generated key (default: temporary location)${RESET}"
+  echo -e "  ${CYAN}--type ${PINK}TYPE${RESET}    ${WHITE}Key type: ${GREEN}ed25519${RESET} (default), ${GREEN}rsa${RESET}, ${GREEN}ecdsa${RESET}, ${GREEN}dsa${RESET}${RESET}"
+  echo -e "  ${CYAN}--bits ${PINK}BITS${RESET}    ${WHITE}Key size in bits (for RSA keys, default: ${RESET}${YELLOW}4096${RESET}${WHITE})${RESET}"
+  echo -e "  ${CYAN}--rounds ${PINK}N${RESET}     ${WHITE}KDF rounds for key generation (default: ${RESET}${YELLOW}100${RESET}${WHITE})${RESET}"
+  echo -e "  ${CYAN}--comment ${PINK}TXT${RESET}  ${WHITE}Key comment (default: ${RESET}${YELLOW}username@hostname${RESET}${WHITE})${RESET}"
+  echo -e "  ${CYAN}--path ${PINK}PATH${RESET}    ${WHITE}Path to save generated key (default: temporary location)${RESET}"
   echo -e "  ${CYAN}--auto${RESET}         ${WHITE}Non-interactive mode, use defaults for all prompts${RESET}"
   echo -e "  ${CYAN}--shred${RESET}        ${WHITE}Securely delete the key files after uploading${RESET}"
   echo -e "  ${CYAN}--ram-disk${RESET}     ${WHITE}Create keys in RAM disk for zero disk persistence${RESET}"
   echo ""
   echo -e "${BLUE}${BOLD}UPLOAD OPTIONS:${RESET}"
+  echo -e "  ${CYAN}--user${RESET}         ${WHITE}Scan ${PINK}~/.ssh${WHITE} for common keys and add them interactively${RESET}"
   echo -e "  ${CYAN}--no-pub${RESET}       ${WHITE}Don't upload the public key (.pub) alongside the private key${RESET}"
   echo -e "  ${CYAN}--only${RESET}         ${WHITE}Only upload the specified file, skip public key and fingerprint${RESET}"
   echo -e "  ${CYAN}--debug${RESET}        ${WHITE}Enable verbose debugging output${RESET}"
@@ -65,10 +143,10 @@ usage() {
   echo -e "  ${CYAN}--help${RESET}         ${WHITE}Display this help message${RESET}"
   echo ""
   echo -e "${UNDERLINE}${BOLD}ENVIRONMENT VARIABLES:${RESET} ${GRAY}(in order of precedence)${RESET}"
-  echo -e "  ${ORANGE}SHH_REGION${RESET}           ${WHITE}Preferred AWS region${RESET}"
-  echo -e "  ${ORANGE}AWS_REGION${RESET}           ${WHITE}Alternative AWS region${RESET}"
-  echo -e "  ${ORANGE}AWS_DEFAULT_REGION${RESET}   ${WHITE}Default AWS region${RESET}"
-  echo -e "  ${ORANGE}SHH_SECRETS${RESET}          ${WHITE}AWS Secrets Manager secret name${RESET}"
+  echo -e "  ${PINK}SHH_REGION${RESET}           ${WHITE}Preferred AWS region${RESET}"
+  echo -e "  ${PINK}AWS_REGION${RESET}           ${WHITE}Alternative AWS region${RESET}"
+  echo -e "  ${PINK}AWS_DEFAULT_REGION${RESET}   ${WHITE}Default AWS region${RESET}"
+  echo -e "  ${PINK}SHH_SECRETS${RESET}          ${WHITE}AWS Secrets Manager secret name${RESET}"
   echo ""
   echo -e "${YELLOW}${BOLD}EXAMPLES:${RESET}"
   echo -e "  ${GRAY}# Upload an existing key${RESET}"
@@ -128,13 +206,59 @@ check_dependencies() {
   done
 }
 
+# Function to securely shred a file
+secure_shred() {
+  local file="$1"
+  local shred_tool
+
+  # Verify the file exists
+  if [ ! -f "$file" ]; then
+    debug_log "File not found for shredding: $file"
+    return 0
+  fi
+
+  echo -e "${YELLOW}${BOLD}Securely shredding file:${RESET} ${CYAN}$file${RESET}"
+
+  # Check available secure deletion tools
+  if command -v shred >/dev/null 2>&1; then
+    shred_tool="shred"
+    debug_log "Using shred for secure deletion"
+    # Use 3 passes with zeros at end for enhanced security
+    shred -vz -n 3 "$file" >/dev/null 2>&1
+    # Remove the file after shredding
+    rm -f "$file"
+    echo -e "${GREEN}✓ File securely deleted with ${CYAN}shred${RESET}"
+  elif command -v srm >/dev/null 2>&1; then
+    shred_tool="srm"
+    debug_log "Using srm for secure deletion"
+    srm -vz "$file" >/dev/null 2>&1
+    echo -e "${GREEN}✓ File securely deleted with ${CYAN}srm${RESET}"
+  elif command -v wipe >/dev/null 2>&1; then
+    shred_tool="wipe"
+    debug_log "Using wipe for secure deletion"
+    wipe -fq "$file" >/dev/null 2>&1
+    echo -e "${GREEN}✓ File securely deleted with ${CYAN}wipe${RESET}"
+  else
+    # Fallback if no secure deletion tools are available
+    debug_log "No specialized secure deletion tools found, using basic deletion"
+    # Overwrite with random data then zeros before deletion
+    dd if=/dev/urandom of="$file" bs=1k count=1 conv=notrunc >/dev/null 2>&1
+    dd if=/dev/zero of="$file" bs=1k count=1 conv=notrunc >/dev/null 2>&1
+    rm -f "$file"
+    echo -e "${YELLOW}⚠️ Basic secure deletion used (no specialized tools available)${RESET}"
+  fi
+
+  return 0
+}
+
 # Function to cleanup temp files
 cleanup() {
   if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
     debug_log "Cleaning up temporary directory: $TEMP_DIR"
     if [ "$SHRED_KEY" = true ]; then
+      echo -e "\n${BLUE}${BOLD}Performing secure cleanup...${RESET}"
       # Find all files in the temp dir and shred them
-      find "$TEMP_DIR" -type f -exec shred -uz {} \;
+      find "$TEMP_DIR" -type f -exec bash -c 'secure_shred "$0"' {} \;
     fi
     rm -rf "$TEMP_DIR"
   fi
@@ -142,6 +266,297 @@ cleanup() {
 
 # Set trap to cleanup on exit
 trap cleanup EXIT INT TERM
+
+# Function to actually perform the key addition to AWS Secrets Manager
+execute_add_key() {
+  # This function assumes FILE_PATH, PROPERTY_NAME, REGION, SECRET_NAME,
+  # UPLOAD_PUB, ADD_TO_AGENT, DEBUG_MODE, ONLY_MODE, UPLOAD_FP are set appropriately (globally).
+
+  # Export values for potential use by other scripts or aws cli calls within this function
+  export SHH_SECRETS="$SECRET_NAME"
+  export SHH_REGION="$REGION"
+  export AWS_DEFAULT_REGION="$REGION"
+
+  # SECURITY CHECK: Verify user has access to the key by trying to add it to ssh-agent first
+  if [ "$ADD_TO_AGENT" = true ]; then
+    print_section "Verifying Key Access for ${CYAN}$FILE_PATH${RESET}"
+    print_status step "Verifying access to private key..."
+    
+    if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
+      debug_log "Starting ssh-agent..."
+      eval "$(ssh-agent -s)" >/dev/null # Silently start if not in debug
+      if $DEBUG_MODE; then eval "$(ssh-agent -s)"; else eval "$(ssh-agent -s)" >/dev/null; fi
+    fi
+    
+    SSH_KEY_FP=""
+    if [ -f "$FILE_PATH.pub" ]; then
+      SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" 2>/dev/null | awk '{print $2}' || echo "")
+      debug_log "Fingerprint for $FILE_PATH: $SSH_KEY_FP"
+      
+      if [ -n "$SSH_KEY_FP" ] && ssh-add -l 2>/dev/null | grep -qF "$SSH_KEY_FP"; then
+        debug_log "Key $FILE_PATH is already loaded in ssh-agent."
+        print_status success "Key already loaded in SSH agent."
+      else
+        debug_log "Attempting to add key $FILE_PATH to ssh-agent..."
+        if ! ssh-add "$FILE_PATH" 2>/dev/null; then
+          print_status error "Failed to add key to SSH agent. Check passphrase or permissions for ${CYAN}$FILE_PATH${RESET}."
+          return 1 # Indicate failure
+        fi
+        print_status success "Successfully verified access to private key."
+      fi
+    else
+      debug_log "No public key for $FILE_PATH, attempting to add private key directly..."
+      if ! ssh-add "$FILE_PATH" 2>/dev/null; then
+        print_status error "Failed to add key to SSH agent. Check passphrase or permissions for ${CYAN}$FILE_PATH${RESET}."
+        return 1 # Indicate failure
+      fi
+      print_status success "Successfully verified access to private key."
+    fi
+  fi
+
+  if ! check_aws_credentials "$REGION"; then
+    return 1 # Indicate failure
+  fi
+
+  print_section "Uploading to AWS Secrets Manager: ${CYAN}$PROPERTY_NAME${RESET}"
+  print_status info "Using AWS Secret: ${CYAN}$SECRET_NAME${WHITE} in region: ${CYAN}$REGION${WHITE}"
+
+  debug_log "Attempting to get existing secret value for $SECRET_NAME..."
+  EXISTING_SECRET=
+  if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
+    print_status warning "Secret '$SECRET_NAME' not found or access denied. Initializing new secret..."
+    
+    debug_log "Checking if secret $SECRET_NAME exists but we lack permissions..."
+    if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
+      print_status error "Secret exists but you don't have permission to read it."
+      return 1
+    fi
+    
+    print_status step "Attempting to create secret '${CYAN}$SECRET_NAME${BLUE}' using shh-admin..."
+    admin_debug_flag=""
+    if $DEBUG_MODE; then admin_debug_flag="--debug"; fi
+    
+    if ! "$SCRIPT_DIR/shh-admin" --secret "$SECRET_NAME" --region "$REGION" --create $admin_debug_flag; then
+      print_status error "Failed to create secret '${CYAN}$SECRET_NAME${RESET}' using shh-admin."
+      return 1
+    fi
+    
+    if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
+      print_status error "Failed to retrieve newly created secret '${CYAN}$SECRET_NAME${RESET}'."
+      return 1
+    fi
+    debug_log "Initialized new secret $SECRET_NAME with empty JSON object"
+  fi
+
+  debug_log "Encoding file content from: $FILE_PATH"
+  ENCODED_FILE_CONTENT=$(base64 -w 0 < "$FILE_PATH")
+  debug_log "Encoded content length for $PROPERTY_NAME: ${#ENCODED_FILE_CONTENT} characters"
+
+  if echo "$EXISTING_SECRET" | jq -e --arg key "$PROPERTY_NAME" 'has($key)' >/dev/null; then
+    print_status warning "Property '${CYAN}$PROPERTY_NAME${YELLOW}' already exists. Overwriting...${RESET}"
+  else
+    print_status info "Adding new property '${CYAN}$PROPERTY_NAME${BLUE}' to secret '${CYAN}$SECRET_NAME${BLUE}'.${RESET}"
+  fi
+
+  debug_log "Merging property $PROPERTY_NAME into existing secret JSON..."
+  UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg value "$ENCODED_FILE_CONTENT" '. + {($key): $value}')
+
+  if [ "$UPLOAD_PUB" = true ] && [ "$ONLY_MODE" = false ]; then
+    PUB_FILE="$FILE_PATH.pub"
+    if [ -f "$PUB_FILE" ]; then
+      print_status step "Adding public key ${CYAN}$PROPERTY_NAME.pub${RESET}..."
+      debug_log "Reading public key from: $PUB_FILE"
+      ENCODED_PUB_CONTENT=$(cat "$PUB_FILE")
+      UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.pub" --arg value "$ENCODED_PUB_CONTENT" '. + {($key): $value}')
+      print_status success "Public key '${CYAN}$PROPERTY_NAME.pub${RESET}' added."
+    else
+      print_status warning "Public key file '${CYAN}$PUB_FILE${RESET}' not found. Skipping."
+    fi
+  fi
+
+  print_section "Adding Key Metadata for ${CYAN}$PROPERTY_NAME${RESET}"
+  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  HOSTNAME_META=$(hostname)
+  USERNAME_META=$(whoami)
+  KEY_TYPE_META=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | awk '{print $3}' | sed 's/[()]//g; s/^ssh-//' || echo "unknown")
+  KEY_SIZE_META=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | awk '{print $1}' || echo "unknown")
+  COMMENT_META=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | sed 's/^[^ ]* [^ ]* [^ ]* //' || echo "")
+
+  SSH_KEY_FP_META=""
+  if [ "$UPLOAD_FP" = true ] && [ "$ONLY_MODE" = false ]; then
+    if [ -f "$FILE_PATH.pub" ]; then
+      print_status step "Calculating SSH key fingerprint..."
+      SSH_KEY_FP_META=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
+      debug_log "Fingerprint for metadata: $SSH_KEY_FP_META"
+    else
+      print_status warning "No public key file for fingerprinting metadata."
+    fi
+  fi
+
+  META_KEY="$PROPERTY_NAME.meta"
+  VERSION=1
+  CREATED_TIMESTAMP="$TIMESTAMP"
+  PREV_ROTATION_TIMESTAMP=""
+
+  if echo "$EXISTING_SECRET" | jq -e --arg key "$META_KEY" 'has($key)' >/dev/null; then
+    debug_log "Found existing metadata for $META_KEY, updating version"
+    EXISTING_META_CONTENT=$(echo "$EXISTING_SECRET" | jq -r --arg key "$META_KEY" '.[$key]')
+    if echo "$EXISTING_META_CONTENT" | jq . >/dev/null 2>&1; then
+      PREV_VERSION=$(echo "$EXISTING_META_CONTENT" | jq -r '.version // 0')
+      VERSION=$((PREV_VERSION + 1))
+      CREATED_TIMESTAMP=$(echo "$EXISTING_META_CONTENT" | jq -r '.created // "'$TIMESTAMP'"')
+      PREV_ROTATION_TIMESTAMP=$(echo "$EXISTING_META_CONTENT" | jq -r '.updated // ""')
+    else
+      debug_log "Existing metadata for $META_KEY is not valid JSON, starting fresh."
+    fi
+  fi
+
+  ROTATION_DUE_DATE=$(date -v+90d -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -d "+90 days" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+  META_JSON_BASE=$(jq -n \
+    --arg version "$VERSION" \
+    --arg created "$CREATED_TIMESTAMP" \
+    --arg updated "$TIMESTAMP" \
+    --arg updater "$USERNAME_META@$HOSTNAME_META" \
+    --arg key_type "$KEY_TYPE_META" \
+    --arg key_size "$KEY_SIZE_META" \
+    --arg comment "$COMMENT_META" \
+    --arg rotation "$ROTATION_DUE_DATE" \
+    '{
+      "version": ($version | tonumber),
+      "created": $created,
+      "updated": $updated,
+      "updated_by": $updater,
+      "key_type": $key_type,
+      "key_size": $key_size,
+      "comment": $comment,
+      "rotation_recommended": $rotation
+    }')
+
+  if [ -n "$SSH_KEY_FP_META" ]; then
+    META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --arg fp "$SSH_KEY_FP_META" '. + {"fingerprint": $fp}')
+  fi
+
+  if [ -n "$PREV_ROTATION_TIMESTAMP" ] && [ "$VERSION" -gt 1 ] && echo "$EXISTING_META_CONTENT" | jq . >/dev/null 2>&1; then
+    META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --arg ts "$PREV_ROTATION_TIMESTAMP" '. + {"last_rotation": $ts}')
+    ROTATION_HISTORY_CANDIDATE=$(echo "$EXISTING_META_CONTENT" | jq '.rotation_history // []')
+    ROTATION_ENTRY=$(jq -n --arg ts "$PREV_ROTATION_TIMESTAMP" --arg v "$PREV_VERSION" '{timestamp: $ts, version: ($v | tonumber)}')
+    UPDATED_HISTORY=$(echo "$ROTATION_HISTORY_CANDIDATE" | jq --argjson entry "$ROTATION_ENTRY" '. + [$entry]' | jq 'sort_by(.timestamp) | reverse | .[0:9]') # Keep last 10
+    META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --argjson history "$UPDATED_HISTORY" '. + {rotation_history: $history}')
+  fi
+
+  META_JSON_STRING=$(echo "$META_JSON_BASE" | jq -c .)
+  debug_log "Generated metadata for $PROPERTY_NAME: $META_JSON_STRING"
+  UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$META_KEY" --arg value "$META_JSON_STRING" '. + {($key): $value}')
+  print_status success "Metadata for '${CYAN}$PROPERTY_NAME${GREEN}' added (version ${YELLOW}$VERSION${GREEN}).${RESET}"
+
+  FP_KEY_OLD="$PROPERTY_NAME.fp"
+  if echo "$UPDATED_SECRET" | jq -e --arg key "$FP_KEY_OLD" 'has($key)' >/dev/null; then
+    debug_log "Removing deprecated fingerprint property '$FP_KEY_OLD' for $PROPERTY_NAME"
+    UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$FP_KEY_OLD" 'del(.[$key])')
+  fi
+
+  print_status step "Updating secret '${CYAN}$SECRET_NAME${RESET}' in AWS Secrets Manager..."
+  TMP_JSON_FILE=$(mktemp)
+echo "$UPDATED_SECRET" > "$TMP_JSON_FILE"
+  aws_debug_flag=""
+  if $DEBUG_MODE; then aws_debug_flag="--debug"; fi
+
+  if ! aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string file://"$TMP_JSON_FILE" $aws_debug_flag >/dev/null 2>&1 && ! $DEBUG_MODE; then
+    # Retry with debug if failed silently, to show error
+    if ! aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string file://"$TMP_JSON_FILE" --debug; then 
+        rm -f "$TMP_JSON_FILE"
+        print_status error "Failed to update secret '${CYAN}$SECRET_NAME${RESET}'. Check AWS permissions / output above."
+        return 1
+    fi
+  elif $DEBUG_MODE; then # If debug mode was on initially
+      if ! aws secretsmanager put-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --secret-string file://"$TMP_JSON_FILE" $aws_debug_flag; then
+        rm -f "$TMP_JSON_FILE"
+        print_status error "Failed to update secret '${CYAN}$SECRET_NAME${RESET}' (debug mode). Check AWS permissions / output above."
+        return 1
+      fi
+  fi
+  rm -f "$TMP_JSON_FILE"
+  print_status success "Successfully updated secret '${CYAN}$SECRET_NAME${WHITE}' with property '${CYAN}$PROPERTY_NAME${WHITE}'."
+  return 0 # Indicate success
+}
+
+# Function to scan ~/.ssh for common keys and add them interactively
+process_user_keys() {
+  print_section "User SSH Key Import from ~/.ssh"
+  local ssh_dir="$HOME/.ssh"
+  local username
+  username=$(whoami)
+  local keys_found_count=0
+  local keys_added_count=0
+
+  # Standard key base names and their types
+  declare -A key_map
+  key_map["id_rsa"]="rsa"
+  key_map["id_ed25519"]="ed25519"
+  key_map["id_ecdsa"]="ecdsa"
+  key_map["id_dsa"]="dsa"
+  # Consider adding _sk variants if needed: id_ecdsa_sk, id_ed25519_sk
+
+  for base_name in "${!key_map[@]}"; do
+    local current_key_path="$ssh_dir/$base_name"
+    local key_type="${key_map[$base_name]}"
+    local proposed_property_name="${username}_${key_type}"
+
+    if [ -f "$current_key_path" ]; then
+      keys_found_count=$((keys_found_count + 1))
+      print_status info "Found key: ${CYAN}$current_key_path${RESET}"
+
+      local confirm_add
+      echo -en "${PINK}${BOLD}Add this key as '${CYAN}$proposed_property_name${PINK}'? (Y/n/s)kip: ${RESET}${WHITE}"
+      read -r confirm_add
+      local confirm_add_lower
+      confirm_add_lower=$(echo "$confirm_add" | tr '[:upper:]' '[:lower:]')
+
+      if [[ "$confirm_add_lower" == "s" || "$confirm_add_lower" == "skip" ]]; then
+        print_status step "Skipping ${CYAN}$base_name${RESET}."
+        echo "" # Add a blank line for readability
+        continue
+      elif [[ "$confirm_add_lower" == "n" ]]; then
+        print_status step "Will not add ${CYAN}$base_name${RESET}."
+        echo "" # Add a blank line for readability
+        continue
+      fi
+      # Default is Yes (empty input or 'y')
+
+      # Set globals for the call to execute_add_key
+      # Stash and restore is good practice if these vars could have other meanings outside this loop,
+      # but in --user mode, these are primarily for execute_add_key calls.
+      local original_file_path="$FILE_PATH"
+      local original_property_name="$PROPERTY_NAME"
+
+      FILE_PATH="$current_key_path"
+      PROPERTY_NAME="$proposed_property_name"
+      # REGION and SECRET_NAME are already global and set by check_shh_environment or defaults.
+      # UPLOAD_PUB, ADD_TO_AGENT, etc., will use their current global settings.
+
+      print_status step "Attempting to add ${CYAN}$FILE_PATH${RESET} as ${CYAN}$PROPERTY_NAME${RESET}..."
+      if execute_add_key; then # execute_add_key returns 0 on success
+        keys_added_count=$((keys_added_count + 1))
+        # Success message is already in execute_add_key
+      else
+        # Error message is already in execute_add_key
+        print_status error "Failed to add key ${CYAN}$FILE_PATH${RESET}. See details above."
+      fi
+      
+      # Restore original values if they were set for some other purpose
+      FILE_PATH="$original_file_path"
+      PROPERTY_NAME="$original_property_name"
+      echo "" # Add a blank line for readability between keys
+    fi
+  done
+
+  if [ "$keys_found_count" -eq 0 ]; then
+    print_status warning "No standard 'id_*' SSH key files found in ${CYAN}$ssh_dir${RESET}."
+  else
+    print_status success "User key scan complete. Processed $keys_found_count potential key(s). Added $keys_added_count key(s)."
+  fi
+  return 0 # process_user_keys itself succeeded or completed
+}
 
 # Generate SSH key function
 generate_ssh_key() {
@@ -153,10 +568,8 @@ generate_ssh_key() {
 
   debug_log "Generating $key_type key with $key_rounds rounds and comment: $key_comment"
   
-  # Create required flags based on key type
   local key_opts=()
   key_opts+=("-t" "$key_type")
-  # Only RSA keys use bits parameter
   if [ "$key_type" = "rsa" ]; then
     key_opts+=("-b" "$key_bits")
   fi
@@ -164,18 +577,32 @@ generate_ssh_key() {
   key_opts+=("-f" "$key_path")
   key_opts+=("-C" "$key_comment")
   
-  echo -e "${BLUE}${BOLD}Generating new SSH key:${RESET} ${WHITE}$key_path${RESET} (type: ${CYAN}$key_type${RESET})"
+  print_section "SSH Key Generation"
+  print_status info "Key type: ${CYAN}$key_type${RESET}, Bits: ${CYAN}${key_bits:-N/A}${RESET}, Rounds: ${CYAN}$key_rounds${RESET}"
+  print_status key "Generating key at: ${CYAN}$key_path${RESET}"
   
-  # Generate key either with or without interaction based on AUTO_MODE
   if [ "$AUTO_MODE" = true ]; then
-    # Auto-mode: create key with empty passphrase
+    print_status step "Generating key non-interactively (empty passphrase)..."
     ssh-keygen "${key_opts[@]}" -N "" -q
   else
-    # Interactive mode: let the user set a passphrase
+    print_status step "Please follow the prompts from ssh-keygen below:"
+    echo -e "${GRAY}(You will be asked to enter a passphrase for the key)${RESET}"
     ssh-keygen "${key_opts[@]}"
   fi
   
-  echo -e "${GREEN}✓ SSH key generated successfully.${RESET}"
+  if [ -f "$key_path" ] && [ -f "$key_path.pub" ]; then
+    print_status success "SSH key pair generated successfully."
+    
+    # Display public key for convenience, especially if not in auto mode
+    if [ "$AUTO_MODE" = false ]; then
+        echo -e "${BLUE}${BOLD}Public key:${RESET}"
+        cat "$key_path.pub"
+        echo -e "${GRAY}(This is the public key you can add to authorized_keys on servers)${RESET}"
+    fi
+  else
+    print_status error "SSH key generation failed. Check ssh-keygen output."
+    return 1
+  fi
   return 0
 }
 
@@ -276,7 +703,7 @@ check_shh_environment() {
   
   # If any required variables are missing
   if [ ${#missing_vars[@]} -gt 0 ]; then
-    echo -e "${YELLOW}${BOLD}Error:${RESET} Required environment variable(s) not set: ${ORANGE}${missing_vars[*]}${RESET}" >&2
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Required environment variable(s) not set: ${PINK}${missing_vars[*]}${RESET}" >&2
     echo -e "Would you like to configure these variables now using shh-admin? (y/n): " >&2
     read -r CONFIGURE
     
@@ -316,13 +743,26 @@ for arg in "$@"; do
     manage_environment "$@"
     exit $?
   fi
+  if [ "$arg" = "--user" ]; then
+    USER_SCAN_MODE=true
+  fi
 done
 
 # Parameters
 FILE_PATH=""
-if [ "$GENERATE_KEY" = false ] && [ $# -gt 0 ]; then
+# If not in user scan mode and not generating, expect a file path
+if [ "$USER_SCAN_MODE" = false ] && [ "$GENERATE_KEY" = false ] && [ $# -gt 0 ]; then
+  # Check if the first argument looks like an option, if so, user might have forgotten file path with --generate
+  if [[ "$1" == --* ]]; then
+    if [ "$GENERATE_KEY" = false ]; then # Only error if not in generate mode already
+        print_status error "File path expected, but found option '$1'."
+        print_status info "If generating a key, please use the --generate flag."
+        usage
+    fi
+  else
 FILE_PATH="$1"
-  shift
+    shift
+  fi
 fi
 
 # Check for optional arguments
@@ -431,6 +871,12 @@ while [ $# -gt 0 ]; do
       ADD_TO_AGENT=false
       shift
       ;;
+    --user)
+      USER_SCAN_MODE=true
+      GENERATE_KEY=false
+      FILE_PATH=""
+      shift
+      ;;
     --*)
       echo "Error: Unknown option '$1'"
       usage
@@ -452,32 +898,78 @@ done
 # Check dependencies
 check_dependencies
 
-# If generating a key
+# Ensure AWS environment variables are set before proceeding
+# This is common for all modes of operation that interact with AWS
+check_shh_environment
+
+if [ "$USER_SCAN_MODE" = true ]; then
+  if [ "$GENERATE_KEY" = true ] || [ -n "$FILE_PATH" ]; then
+    print_status error "The --user option cannot be used with --generate or a specific file path."
+    usage
+  fi
+  # Placeholder for now, will call process_user_keys
+  print_section "User SSH Key Import Mode"
+  print_status info "Scanning ~/.ssh for keys (not yet implemented)..."
+  # process_user_keys 
+  process_user_keys # Actually call the function now
+  exit 0
+fi
+
+# If generating a key (and not --user mode)
 if [ "$GENERATE_KEY" = true ]; then
   # Create a path for the key if none specified
   if [ -z "$KEY_PATH" ]; then
     if [ "$USE_RAM_DISK" = true ]; then
-      # Create a directory in RAM disk
+      # Create a directory in RAM disk - enhanced with more options and better security
       if [ -d "/dev/shm" ]; then
         TEMP_DIR=$(mktemp -d /dev/shm/shh-XXXXXXXXXX)
+        print_status secure "Using RAM disk for secure key generation at ${CYAN}$TEMP_DIR${RESET}"
+        chmod 700 "$TEMP_DIR"
+      elif [ -d "/run/user/$(id -u)" ]; then
+        TEMP_DIR=$(mktemp -d "/run/user/$(id -u)/shh-XXXXXXXXXX")
+        print_status secure "Using user runtime directory for secure key generation at ${CYAN}$TEMP_DIR${RESET}"
+        chmod 700 "$TEMP_DIR"
+      elif [ "$(uname)" = "Darwin" ] && [ -d "/private/tmp" ]; then
+        TEMP_DIR=$(mktemp -d /private/tmp/shh-XXXXXXXXXX)
+        print_status warning "RAM disk not available on macOS, using private temp directory at ${CYAN}$TEMP_DIR${RESET}"
+        chmod 700 "$TEMP_DIR"
       else
-        echo -e "${YELLOW}${BOLD}Warning:${RESET} RAM disk not available at ${CYAN}/dev/shm${RESET}"
+        print_status warning "RAM disk not available at ${CYAN}/dev/shm${RESET} or other secure locations"
         echo -e "${WHITE}Using regular temporary directory instead.${RESET}"
         TEMP_DIR=$(mktemp -d)
+        chmod 700 "$TEMP_DIR"
       fi
     else
-      # Create a regular temporary directory
       TEMP_DIR=$(mktemp -d)
+      chmod 700 "$TEMP_DIR"
+      debug_log "Using regular temporary directory: $TEMP_DIR"
     fi
     KEY_PATH="$TEMP_DIR/key"
     debug_log "Using temporary key path: $KEY_PATH"
   fi
   
-  # Auto-generate property name if not specified
+  # Handle property name for key generation
   if [ -z "$PROPERTY_NAME" ]; then
-    # Generate a name based on hostname and key type
-    PROPERTY_NAME="$(hostname | tr -d '.')_$KEY_TYPE"
-    debug_log "Auto-generated property name: $PROPERTY_NAME"
+    default_prop_name="$(whoami)_$KEY_TYPE"
+    if [ "$AUTO_MODE" = true ]; then
+      PROPERTY_NAME="$default_prop_name"
+      debug_log "Auto-generated property name in --auto mode: $PROPERTY_NAME"
+      print_status info "Using auto-generated key name: ${CYAN}$PROPERTY_NAME${RESET}"
+    else
+      print_section "Key Generation Setup"
+      prompt_for_input "Enter a name for this key (default: $default_prop_name):" PROPERTY_NAME "$default_prop_name"
+      if [ -z "$PROPERTY_NAME" ]; then
+          PROPERTY_NAME="$default_prop_name"
+      fi
+      debug_log "Property name set to: $PROPERTY_NAME"
+      print_status success "Key name set to: ${CYAN}$PROPERTY_NAME${RESET}"
+    fi
+  else
+    # If property name was provided via command line, just confirm it
+    if [ "$GENERATE_KEY" = true ]; then # Only print this if in generate mode
+        print_section "Key Generation Setup"
+        print_status info "Using provided key name: ${CYAN}$PROPERTY_NAME${RESET}"
+    fi
   fi
   
   # Generate the key
@@ -503,318 +995,38 @@ PROPERTY_NAME="${PROPERTY_NAME:-$(basename "$FILE_PATH")}"
 REGION="${REGION:-$DEFAULT_REGION}"
 SECRET_NAME="${SHH_SECRETS:-$DEFAULT_SECRET_NAME}"
 
-# Check required environment variables
-check_shh_environment
-
-# Export values for potential use by other scripts
-export SHH_SECRETS="$SECRET_NAME"
-export SHH_REGION="$REGION"
-export AWS_DEFAULT_REGION="$REGION"
-
-# SECURITY CHECK: Verify user has access to the key by trying to add it to ssh-agent first
-if [ "$ADD_TO_AGENT" = true ]; then
-  echo -e "${BLUE}${BOLD}Verifying access to private key...${RESET}"
-  
-  # Start ssh-agent if not running
-  if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
-    debug_log "Starting ssh-agent..."
-    if $DEBUG_MODE; then
-      eval "$(ssh-agent -s)"
-    else
-      eval "$(ssh-agent -s)" >/dev/null
-    fi
+# Call the main key addition logic, unless in --user mode (which handles calls itself)
+if [ "$USER_SCAN_MODE" = false ]; then
+  if ! execute_add_key; then
+    # Error messages are handled within execute_add_key
+    print_status error "Key addition process failed for ${CYAN}${PROPERTY_NAME:-$FILE_PATH}${RESET}."
+    # Cleanup trap will run, but exit explicitly with error
+    exit 1
   fi
-  
-  # Calculate fingerprint if public key is available for checking if already loaded
-  SSH_KEY_FP=""
-  if [ -f "$FILE_PATH.pub" ]; then
-    SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" 2>/dev/null | awk '{print $2}' || echo "")
-    debug_log "Fingerprint: $SSH_KEY_FP"
+
+  # If we generated a key, provide information about it and shredding
+  if [ "$GENERATE_KEY" = true ]; then
+    print_section "Key Generation Summary & Cleanup"
+    print_status success "Successfully generated and uploaded key '${CYAN}$PROPERTY_NAME${WHITE}' (type: ${CYAN}$KEY_TYPE${WHITE})"
     
-    # Check if the key is already in ssh-agent using fingerprint
-    if [ -n "$SSH_KEY_FP" ] && ssh-add -l 2>/dev/null | grep -q "$SSH_KEY_FP"; then
-      debug_log "Key is already loaded in ssh-agent."
-      echo -e "${GREEN}✓ Key is already loaded in SSH agent.${RESET}"
-    else
-      # Try to add the key to ssh-agent to verify user has access
-      debug_log "Attempting to add key to ssh-agent..."
-      
-      if ! ssh-add "$FILE_PATH" 2>/dev/null; then
-        echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to add key to SSH agent. You may not have permission to use this key." >&2
-        echo -e "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
-        exit 1
+    if [ "$SHRED_KEY" = true ]; then
+      print_status secure "Key files in temporary location will be securely shredded upon script exit."
+      # If a specific path was given with --generate --path, shred that too if --shred is on
+      if [[ "$KEY_PATH" != "$TEMP_DIR/key" ]] && [ -n "$KEY_PATH" ]; then 
+          print_status step "Securely shredding original key files at specified --path: ${CYAN}$KEY_PATH${RESET}..."
+          secure_shred "$KEY_PATH"
+          if [ -f "$KEY_PATH.pub" ]; then
+            secure_shred "$KEY_PATH.pub"
+          fi
       fi
-      
-      echo -e "${GREEN}✓ Successfully verified access to private key.${RESET}"
-    fi
-  else
-    # No public key to check fingerprint, try to add directly
-    debug_log "No public key found, attempting to add private key directly..."
-    
-    if ! ssh-add "$FILE_PATH" 2>/dev/null; then
-      echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to add key to SSH agent. You may not have permission to use this key." >&2
-      echo -e "Please ensure you have the correct passphrase or permissions for this key before uploading." >&2
-      exit 1
+    elif [ -n "$TEMP_DIR" ]; then # Key was generated in a temp dir and not shredded
+      print_status key "Generated key located at: ${CYAN}$KEY_PATH${WHITE}"
+      print_status warning "Consider securely shredding these files: ${CYAN}shred -uz $KEY_PATH $KEY_PATH.pub${RESET}"
     fi
     
-    echo -e "${GREEN}✓ Successfully verified access to private key.${RESET}"
-  fi
-fi
-
-# Now check AWS credentials
-if ! check_aws_credentials "$REGION"; then
-  exit 1
-fi
-
-echo -e "${BLUE}${BOLD}Using AWS Secret:${RESET} ${CYAN}$SECRET_NAME${RESET} in region: ${CYAN}$REGION${RESET}"
-
-# Retrieve the existing secret JSON from AWS Secrets Manager
-debug_log "Attempting to get existing secret value..."
-if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
-  echo -e "${YELLOW}Secret '$SECRET_NAME' not found or access denied. Initializing new secret...${RESET}"
-  
-  # Check if the secret exists but we don't have permission
-  debug_log "Checking if secret exists but we lack permissions..."
-  if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" >/dev/null 2>&1; then
-    echo -e "${YELLOW}${BOLD}Error:${RESET} Secret exists but you don't have permission to read it."
-    exit 1
-  fi
-  
-  # Try to create the secret using shh-admin
-  echo -e "${BLUE}Attempting to create secret '${CYAN}$SECRET_NAME${BLUE}' using shh-admin...${RESET}"
-  
-  # Prepare debug flag
-  admin_debug_flag=""
-  if $DEBUG_MODE; then
-    admin_debug_flag="--debug"
-  fi
-  
-  # Call shh-admin to create the secret
-  if ! "$SCRIPT_DIR/shh-admin" --secret "$SECRET_NAME" --region "$REGION" --create $admin_debug_flag; then
-    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to create secret '${CYAN}$SECRET_NAME${RESET}' using shh-admin."
-    exit 1
-  fi
-  
-  # Now get the empty secret JSON
-  if ! EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query SecretString --output text 2>/dev/null); then
-    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to retrieve newly created secret '${CYAN}$SECRET_NAME${RESET}'."
-    exit 1
-  fi
-  
-  debug_log "Initialized new secret with empty JSON object"
-fi
-
-# Base64 encode the file content
-debug_log "Encoding file content from: $FILE_PATH"
-ENCODED_FILE_CONTENT=$(base64 -w 0 < "$FILE_PATH")
-debug_log "Encoded content length: ${#ENCODED_FILE_CONTENT} characters"
-
-# Check if the property already exists in the secret
-if echo "$EXISTING_SECRET" | jq -e --arg key "$PROPERTY_NAME" 'has($key)' >/dev/null; then
-  echo -e "${YELLOW}Property '${CYAN}$PROPERTY_NAME${YELLOW}' already exists in secret '${CYAN}$SECRET_NAME${YELLOW}'. Overwriting...${RESET}"
-else
-  echo -e "${BLUE}Adding new property '${CYAN}$PROPERTY_NAME${BLUE}' to secret '${CYAN}$SECRET_NAME${BLUE}'.${RESET}"
-fi
-
-# Merge new property into existing JSON
-debug_log "Merging property into existing secret JSON..."
-UPDATED_SECRET=$(echo "$EXISTING_SECRET" | jq --arg key "$PROPERTY_NAME" --arg value "$ENCODED_FILE_CONTENT" '. + {($key): $value}')
-
-# If not in --only mode and --pub is set, also upload the .pub file
-if [ "$UPLOAD_PUB" = true ] && [ "$ONLY_MODE" = false ]; then
-  PUB_FILE="$FILE_PATH.pub"
-  if [ -f "$PUB_FILE" ]; then
-    echo -e "${BLUE}Adding public key...${RESET}"
-    debug_log "Reading public key from: $PUB_FILE"
-    ENCODED_PUB_CONTENT=$(cat "$PUB_FILE")
-    UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$PROPERTY_NAME.pub" --arg value "$ENCODED_PUB_CONTENT" '. + {($key): $value}')
-    echo -e "${GREEN}✓ Public key '${CYAN}$PROPERTY_NAME.pub${GREEN}' added to secret.${RESET}"
-  else
-    echo -e "${YELLOW}${BOLD}Warning:${RESET} Public key file '${CYAN}$PUB_FILE${RESET}' not found. Skipping upload."
-  fi
-fi
-
-# Add or update metadata for the key
-echo -e "${BLUE}${BOLD}Adding key metadata...${RESET}"
-
-# Get current timestamp in ISO 8601 format
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-HOSTNAME=$(hostname)
-USERNAME=$(whoami)
-KEY_TYPE=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | awk '{print $3}' || echo "unknown")
-KEY_SIZE=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | awk '{print $1}' || echo "unknown")
-COMMENT=$(ssh-keygen -l -f "$FILE_PATH" 2>/dev/null | sed 's/^[^ ]* [^ ]* [^ ]* //' || echo "")
-
-# Calculate fingerprint if public key is available
-SSH_KEY_FP=""
-if [ "$UPLOAD_FP" = true ] && [ "$ONLY_MODE" = false ]; then
-  if [ -f "$FILE_PATH.pub" ]; then
-    echo -e "${BLUE}Calculating SSH key fingerprint...${RESET}"
-    debug_log "Running ssh-keygen to calculate fingerprint"
-    SSH_KEY_FP=$(ssh-keygen -lf "$FILE_PATH.pub" | awk '{print $2}')
-    debug_log "Fingerprint: $SSH_KEY_FP"
-  else
-    echo -e "${YELLOW}${BOLD}Warning:${RESET} No public key file found for fingerprinting."
-  fi
-fi
-
-# Check if there's existing metadata to update version
-META_KEY="$PROPERTY_NAME.meta"
-VERSION=1
-CREATED_TIMESTAMP="$TIMESTAMP"
-PREV_ROTATION_TIMESTAMP=""
-
-# If metadata already exists, extract version and created timestamp
-if echo "$EXISTING_SECRET" | jq -e --arg key "$META_KEY" 'has($key)' >/dev/null; then
-  debug_log "Found existing metadata, updating version"
-  EXISTING_META=$(echo "$EXISTING_SECRET" | jq -r --arg key "$META_KEY" '.[$key]')
-  
-  # Try to parse existing metadata as JSON
-  if echo "$EXISTING_META" | jq . >/dev/null 2>&1; then
-    # Extract previous version and increment
-    PREV_VERSION=$(echo "$EXISTING_META" | jq -r '.version // 0')
-    VERSION=$((PREV_VERSION + 1))
-    
-    # Keep original created date
-    CREATED_TIMESTAMP=$(echo "$EXISTING_META" | jq -r '.created // "'$TIMESTAMP'"')
-    
-    # Save previous updated timestamp as rotation timestamp
-    PREV_ROTATION_TIMESTAMP=$(echo "$EXISTING_META" | jq -r '.updated // ""')
-  else
-    debug_log "Existing metadata is not valid JSON, starting with version 1"
-  fi
-fi
-
-# Calculate days until recommended rotation (90 days from now)
-ROTATION_DUE_DATE=$(date -v+90d -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -d "+90 days" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
-
-# Build metadata JSON using jq directly instead of here-doc + jq modifications
-META_JSON_BASE=$(jq -n \
-  --arg version "$VERSION" \
-  --arg created "$CREATED_TIMESTAMP" \
-  --arg updated "$TIMESTAMP" \
-  --arg updater "$USERNAME@$HOSTNAME" \
-  --arg key_type "$KEY_TYPE" \
-  --arg key_size "$KEY_SIZE" \
-  --arg comment "$COMMENT" \
-  --arg rotation "$ROTATION_DUE_DATE" \
-  '{
-    "version": ($version | tonumber),
-    "created": $created,
-    "updated": $updated,
-    "updated_by": $updater,
-    "key_type": $key_type,
-    "key_size": $key_size,
-    "comment": $comment,
-    "rotation_recommended": $rotation
-  }')
-
-# Add fingerprint to metadata if available
-if [ -n "$SSH_KEY_FP" ]; then
-  META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --arg fp "$SSH_KEY_FP" '. + {"fingerprint": $fp}')
-fi
-
-# Add rotation history if this is not the first version
-if [ -n "$PREV_ROTATION_TIMESTAMP" ] && [ "$VERSION" -gt 1 ]; then
-  # Add last rotation timestamp
-  META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --arg ts "$PREV_ROTATION_TIMESTAMP" '. + {"last_rotation": $ts}')
-  
-  # Add rotation history tracking
-  if echo "$EXISTING_META" | jq -e 'has("rotation_history")' >/dev/null 2>&1; then
-    ROTATION_HISTORY=$(echo "$EXISTING_META" | jq '.rotation_history')
-    
-    # Add the last update to history
-    ROTATION_ENTRY=$(jq -n --arg ts "$PREV_ROTATION_TIMESTAMP" --arg v "$PREV_VERSION" '{timestamp: $ts, version: ($v | tonumber)}')
-    UPDATED_HISTORY=$(echo "$ROTATION_HISTORY" | jq --argjson entry "$ROTATION_ENTRY" '. + [$entry]' | jq 'sort_by(.timestamp) | reverse | .[0:10]')
-  else
-    # Create new history with just this entry
-    ROTATION_ENTRY=$(jq -n --arg ts "$PREV_ROTATION_TIMESTAMP" --arg v "$PREV_VERSION" '{timestamp: $ts, version: ($v | tonumber)}')
-    UPDATED_HISTORY=$(jq -n --argjson entry "$ROTATION_ENTRY" '[$entry]')
-  fi
-  
-  # Add history to metadata
-  META_JSON_BASE=$(echo "$META_JSON_BASE" | jq --argjson history "$UPDATED_HISTORY" '. + {rotation_history: $history}')
-fi
-
-# Convert metadata JSON to a string to store in the secret
-META_JSON_STRING=$(echo "$META_JSON_BASE" | jq -c .)
-debug_log "Generated metadata: $META_JSON_STRING"
-
-# Add metadata to secret as a STRING value
-UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$META_KEY" --arg value "$META_JSON_STRING" '. + {($key): $value}')
-echo -e "${GREEN}✓ Metadata for '${CYAN}$PROPERTY_NAME${GREEN}' added to secret (version ${YELLOW}$VERSION${GREEN}).${RESET}"
-
-# Check if we need to remove the old fingerprint property
-# This helps with migration from previous versions of the script
-FP_KEY="$PROPERTY_NAME.fp"
-if echo "$UPDATED_SECRET" | jq -e --arg key "$FP_KEY" 'has($key)' >/dev/null; then
-  debug_log "Removing deprecated fingerprint property '$FP_KEY'"
-  UPDATED_SECRET=$(echo "$UPDATED_SECRET" | jq --arg key "$FP_KEY" 'del(.[$key])')
-fi
-
-# Store the updated JSON back in AWS Secrets Manager
-echo -e "${BLUE}${BOLD}Updating secret in AWS Secrets Manager...${RESET}"
-
-# Create a temporary file for the secret JSON
-TMP_JSON_FILE=$(mktemp)
-echo "$UPDATED_SECRET" > "$TMP_JSON_FILE"
-
-# Prepare debug flag for AWS CLI
-aws_debug_flag=""
-if $DEBUG_MODE; then
-  aws_debug_flag="--debug"
-  # Run with debugging enabled
-  if ! aws secretsmanager put-secret-value \
-       --secret-id "$SECRET_NAME" \
-       --region "$REGION" \
-       --secret-string file://"$TMP_JSON_FILE" \
-       $aws_debug_flag; then
-    rm -f "$TMP_JSON_FILE"
-    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to update secret '${CYAN}$SECRET_NAME${RESET}'. Check your AWS permissions."
-    echo -e "Make sure you have the following IAM permissions for secret '${CYAN}$SECRET_NAME${RESET}':"
-    echo -e "  - ${ORANGE}secretsmanager:GetSecretValue${RESET}"
-    echo -e "  - ${ORANGE}secretsmanager:PutSecretValue${RESET}"
-    echo -e "  - ${ORANGE}secretsmanager:UpdateSecret${RESET}"
-    exit 1
-  fi
-else
-  # Run without debug output
-  if ! aws secretsmanager put-secret-value \
-       --secret-id "$SECRET_NAME" \
-       --region "$REGION" \
-       --secret-string file://"$TMP_JSON_FILE" \
-       > /dev/null 2>&1; then
-    rm -f "$TMP_JSON_FILE"
-    echo -e "${YELLOW}${BOLD}Error:${RESET} Failed to update secret '${CYAN}$SECRET_NAME${RESET}'. Check your AWS permissions."
-    echo -e "Make sure you have the following IAM permissions for secret '${CYAN}$SECRET_NAME${RESET}':"
-    echo -e "  - ${ORANGE}secretsmanager:GetSecretValue${RESET}"
-    echo -e "  - ${ORANGE}secretsmanager:PutSecretValue${RESET}"
-    echo -e "  - ${ORANGE}secretsmanager:UpdateSecret${RESET}"
-    exit 1
-  fi
-fi
-
-# Clean up the temporary file
-rm -f "$TMP_JSON_FILE"
-
-echo -e "${GREEN}${BOLD}✓ Successfully updated secret '${CYAN}$SECRET_NAME${GREEN}' with new property '${CYAN}$PROPERTY_NAME${GREEN}'.${RESET}"
-
-# If we generated a key, provide information about it
-if [ "$GENERATE_KEY" = true ]; then
-  echo -e "${GREEN}${BOLD}✓ Successfully generated and uploaded key '${CYAN}$PROPERTY_NAME${GREEN}' (type: ${CYAN}$KEY_TYPE${GREEN})${RESET}"
-  
-  # If shredding was requested, notify the user
-  if [ "$SHRED_KEY" = true ]; then
-    echo -e "${YELLOW}${BOLD}→ Key files will be securely shredded upon script exit.${RESET}"
-  elif [ -n "$TEMP_DIR" ]; then
-    echo -e "${WHITE}Generated key located at: ${CYAN}$FILE_PATH${RESET}"
-    echo -e "${YELLOW}${BOLD}⚠️ Consider securely shredding these files when no longer needed:${RESET}"
-    echo -e "  ${CYAN}shred -uz $FILE_PATH $FILE_PATH.pub${RESET}"
-  fi
-  
-  # If using RAM disk, let user know
-  if [ "$USE_RAM_DISK" = true ]; then
-    echo -e "${BLUE}${BOLD}ℹ️ Key was generated in RAM disk and will not persist after reboot.${RESET}"
+    if [ "$USE_RAM_DISK" = true ] && [[ "$KEY_PATH" == /dev/shm/* || "$KEY_PATH" == /run/user/* ]]; then
+      print_status secure "Key was generated in RAM disk and will not persist after reboot."
+    fi
   fi
 fi
 
