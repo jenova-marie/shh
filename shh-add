@@ -160,7 +160,7 @@ for arg in "$@"; do
     shift # Remove the script name from args
     manage_environment "$@"
     exit $?
-  fi
+fi
 done
 
 # Parameters

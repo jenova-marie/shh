@@ -205,6 +205,82 @@ shh-admin --region us-west-2 --secret prod-keys --list --debug
 
 ## 🛠️ Usage
 
+### 🔄 **Drop-in SSH Replacement**
+
+Shh is designed to be a **complete drop-in replacement** for the traditional SSH command. It supports **all standard SSH options and parameters**, passing them directly to the underlying SSH command after handling key retrieval.
+
+```bash
+# Use shh exactly like you would use ssh, with all the same parameters
+shh -p 2222 -X -o ConnectTimeout=10 user@hostname
+
+# Specify a custom key using -i (gets key from AWS Secrets Manager, not the filesystem)
+shh -i myserver_key -p 2222 user@hostname
+
+# Use with tools that expect ssh like scp or rsync
+alias scp="scp -S shh"
+rsync -e "shh" local/file user@remote:/path
+```
+
+All SSH flags and options work exactly as expected:
+- Port specification (`-p`)
+- X11 forwarding (`-X`, `-Y`)
+- SSH options (`-o`)
+- Command execution (`shh user@host command`)
+- And any other standard SSH flag
+
+You can seamlessly replace `ssh` with `shh` in your scripts, aliases, and workflows!
+
+### 🔑 **Secure Key Generation and Destruction**
+
+For maximum security, follow these best practices when creating and destroying SSH keys before storing them in AWS Secrets Manager:
+
+```bash
+# Generate a strong, modern Ed25519 key (recommended)
+ssh-keygen -t ed25519 -a 100 -f ~/temp_key -C "server_name $(date +%Y-%m-%d)"
+
+# Or generate a strong RSA key (for legacy compatibility)
+ssh-keygen -t rsa -b 4096 -a 100 -f ~/temp_key -C "server_name $(date +%Y-%m-%d)"
+```
+
+Key parameters explained:
+- `-t ed25519`: Modern, secure, and fast algorithm (preferred)
+- `-t rsa -b 4096`: Strong RSA key with 4096-bit length (for compatibility)
+- `-a 100`: Increases key derivation iterations for enhanced security
+- `-C "comment"`: Adds a descriptive comment with date for tracking
+- `-f ~/temp_key`: Saves the key to a temporary location for immediate upload
+
+After adding the key to AWS Secrets Manager with `shh-add`, securely destroy the local files:
+
+```bash
+# Method 1: Basic secure deletion with shred (most systems)
+shred -uz ~/temp_key ~/temp_key.pub
+
+# Method 2: Multi-pass overwrite for added security
+shred -vfz -n 10 ~/temp_key ~/temp_key.pub
+rm -f ~/temp_key ~/temp_key.pub
+
+# Method 3: Use secure-delete tools if available
+srm -vz ~/temp_key ~/temp_key.pub  # If secure-delete package is installed
+```
+
+For extremely sensitive environments:
+```bash
+# Recommended: Create keys in RAM disk for zero disk persistence
+mkdir -p /dev/shm/temp_ssh
+cd /dev/shm/temp_ssh
+ssh-keygen -t ed25519 -a 100 -f ./key -C "server_name $(date +%Y-%m-%d)"
+shh-add ./key server_name --pub
+shred -uz ./key ./key.pub
+cd -
+rmdir /dev/shm/temp_ssh
+```
+
+These practices ensure:
+- Strong cryptographic keys are generated
+- Keys never touch persistent storage (or are securely erased)
+- No sensitive material remains on your local system
+- Key metadata includes creation date and purpose for tracking
+
 ### 🔁 **The Complete Shh Workflow**
 
 Here's how to eliminate local SSH keys from your system while maintaining secure access:

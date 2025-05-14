@@ -19,7 +19,10 @@ usage() {
   echo "                 (default: uses '<username>_ed25519' from user@host)"
   echo "  --debug        Enable verbose debugging output"
   echo "  --env          Manage environment variables with shh-env"
-  echo "  --help         Display this help message"
+  echo "  --help|-h      Display this help message"
+  echo ""
+  echo "Shh supports all standard SSH options and flags."
+  echo "These are passed directly to the underlying SSH command."
   echo ""
   echo "Environment Setup:"
   echo "  Run 'shh-env' to configure your environment variables"
@@ -120,17 +123,27 @@ SSH_OPTS=()
 # Add default SSH options
 SSH_OPTS+=("-o" "StrictHostKeyChecking=accept-new")
 
+# List of SSH options that take an argument
+SSH_OPTS_WITH_ARG=(
+  "-b" "-c" "-D" "-E" "-e" "-F" "-I" "-i" "-J" "-L" "-l" "-m" "-O" "-o" "-p" "-Q" 
+  "-R" "-S" "-W" "-w" "-4" "-6" "-B" "-C" "-c" "-f" "-G" "-g" "-K" "-k" "-M" "-N" 
+  "-n" "-q" "-s" "-T" "-t" "-V" "-v" "-X" "-x" "-Y" "-y"
+)
+
+# Function to check if an option requires an argument
+requires_argument() {
+  local option="$1"
+  for opt in "${SSH_OPTS_WITH_ARG[@]}"; do
+    if [[ "$option" == "$opt" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Parse command line options first (following ssh style)
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -i)
-      if [[ $# -lt 2 ]]; then
-        echo "Error: -i option requires an argument" >&2
-        usage
-      fi
-      KEY_NAME="$2"
-      shift 2
-      ;;
     --debug)
       DEBUG_MODE=true
       SSH_OPTS+=("-v")
@@ -144,10 +157,24 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       usage
       ;;
+    -i)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: -i option requires an argument" >&2
+        usage
+      fi
+      KEY_NAME="$2"
+      shift 2
+      ;;
     -*)
-      # Pass through any other SSH options
-      SSH_OPTS+=("$1")
-      shift
+      # Handle SSH options that take arguments
+      if requires_argument "$1" && [[ $# -gt 1 ]]; then
+        SSH_OPTS+=("$1" "$2")
+        shift 2
+      else
+        # Single options without arguments
+        SSH_OPTS+=("$1")
+        shift
+      fi
       ;;
     *)
       # Non-option arguments
@@ -156,8 +183,8 @@ while [[ $# -gt 0 ]]; do
       elif [ -z "$REGION" ]; then
         REGION="$1"
       else
-        echo "Error: Unexpected argument '$1'"
-        usage
+        # If we have extra arguments, assume they're for ssh
+        SSH_OPTS+=("$1")
       fi
       shift
       ;;
@@ -308,6 +335,7 @@ fi
 
 # SSH into the host using the loaded key
 debug_log "Connecting to $USER_HOST using key '$KEY_NAME'..."
+debug_log "SSH options: ${SSH_OPTS[*]}"
 ssh "${SSH_OPTS[@]}" "$USER_HOST"
 
 exit 0
