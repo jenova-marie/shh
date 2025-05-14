@@ -13,6 +13,7 @@ Shh is an elegant command-line toolkit designed for **securely managing SSH keys
 - ⚙️ **Environment Management** – Easily configure, persist, and manage Shh environment variables.
 - 🖥️ **Beautiful UI** – Intuitive and visually appealing terminal interface with color-coding.
 - 🔧 **Automation Support** – Fully scriptable for CI/CD pipelines and automated deployments.
+- 🔄 **Self-Updating** – Easy in-place updates that keep your installation current with the latest features.
 
 ## 📦 Installation
 
@@ -159,6 +160,9 @@ shh-admin --env
 # List keys in your secret
 shh-admin --list
 
+# Update Shh to the latest version
+shh-admin --update
+
 # All options combined
 shh-admin --region us-west-2 --secret prod-keys --list --debug
 ```
@@ -235,7 +239,7 @@ The Shh toolkit consists of several components, each with a specific purpose:
 |-----------|-------------|
 | **shh** | Main command for SSH connections using keys from AWS Secrets Manager |
 | **shh-add** | Tool for adding SSH keys to AWS Secrets Manager |
-| **shh-admin** | Administration utility for managing secrets and IAM permissions |
+| **shh-admin** | Administration utility for managing secrets, IAM permissions, and updates |
 | **shh-env** | Environment variable management with beautiful UI |
 | **shh-install** | Installer/uninstaller script with automation support |
 
@@ -314,6 +318,24 @@ aws sts get-caller-identity
 ```bash
 eval "$(ssh-agent -s)"
 ```
+
+### Updating Shh
+
+To update Shh to the latest version:
+
+```bash
+# Interactive update with confirmation
+shh-admin --update
+
+# When updating from an older version without the update feature
+curl -fsSL https://raw.githubusercontent.com/jenova-marie/shh/root/shh-install | bash
+```
+
+The update process will:
+- Download the latest installer from the GitHub repository
+- Execute it to update all components
+- Preserve your existing configuration and environment settings
+- Provide feedback on the update status
 
 ### Logs and Debugging
 The main log file is located at:

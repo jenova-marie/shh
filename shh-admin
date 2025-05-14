@@ -17,6 +17,7 @@ usage() {
   echo "  -d, --detail KEY_NAME     Show details for a specific key"
   echo "  -c, --create              Create the secret if it doesn't exist, non-interactive mode"
   echo "  -e, --env                 Only manage environment variables without proceeding to AWS operations"
+  echo "  -u, --update              Update SHH by downloading and executing the latest installer"
   echo "  --debug                   Enable verbose debugging output"
   echo ""
   echo "Environment variables (in order of precedence):"
@@ -335,6 +336,24 @@ check_iam_permissions() {
   fi
 }
 
+# Function to display instructions for adding a key
+display_add_key_instructions() {
+  local secret_name="$1"
+  local region="$2"
+  
+  echo ""
+  echo "╔═════════════════════════════════════════════════════════════════╗"
+  echo "║                      💡 Next Steps                              ║"
+  echo "╚═════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "To add an SSH key to '$secret_name', use one of these commands:"
+  echo ""
+  echo "$ shh-add ~/.ssh/id_rsa your-key-name"
+  echo ""
+  echo "$ shh-admin --detail your-key-name  # View key details after adding"
+  echo ""
+}
+
 # Function to list keys inside the secret
 list_keys() {
   local secret_name="$1"
@@ -357,7 +376,7 @@ list_keys() {
   
   if [ -z "$keys" ]; then
     echo "(No SSH keys found)"
-    # Display instructions to add a key
+    # Display instructions to add a key ONLY when no keys exist
     display_add_key_instructions "$secret_name" "$region"
     return 0
   fi
@@ -391,34 +410,7 @@ list_keys() {
     printf "%-30s %-12s %-12s %-20s %s\n" "$key" "$key_type" "$key_size" "$created_date" "$rotation_date"
   done
   
-  # Display instructions to add a key after listing
-  display_add_key_instructions "$secret_name" "$region"
-}
-
-# Function to display instructions for adding a key
-display_add_key_instructions() {
-  local secret_name="$1"
-  local region="$2"
-  
-  echo ""
-  echo "╔═════════════════════════════════════════════════════════════════╗"
-  echo "║                      💡 Next Steps                              ║"
-  echo "╚═════════════════════════════════════════════════════════════════╝"
-  echo ""
-  echo "To add an SSH key to '$secret_name', you can:"
-  echo ""
-  echo "1. Generate a new SSH key and add it:"
-  echo "   $ shh-keygen --name your-key-name"
-  echo ""
-  echo "2. Import an existing SSH key:"
-  echo "   $ shh-import --name your-key-name --key-file ~/.ssh/id_rsa"
-  echo ""
-  echo "3. View details of a specific key:"
-  echo "   $ shh-admin --detail your-key-name"
-  echo ""
-  echo "For more options and detailed help:"
-  echo "   $ shh-keygen --help"
-  echo "   $ shh-import --help"
+  # Removed: Don't display instructions here when keys already exist
 }
 
 # Function to show key details
@@ -503,6 +495,61 @@ show_key_details() {
   fi
 }
 
+# Function to update SHH by downloading and executing the latest installer
+update_shh() {
+  echo "╔═════════════════════════════════════════════════════════════════╗"
+  echo "║                      🔄 Updating SHH                            ║"
+  echo "╚═════════════════════════════════════════════════════════════════╝"
+  
+  # URL for the latest installer
+  local install_url="https://raw.githubusercontent.com/cevoaustralia/shh/main/shh-install"
+  
+  echo "Downloading latest installer from:"
+  echo "$install_url"
+  echo ""
+  
+  # Ask for confirmation before proceeding
+  echo -n "Do you want to proceed with the update? (y/n): "
+  read -r CONFIRM
+  if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo "Update canceled."
+    return 1
+  fi
+  
+  echo "Downloading and executing installer..."
+  
+  # Create a temporary file for the installer
+  local temp_installer=$(mktemp)
+  
+  # Clean up temp file on exit
+  trap 'rm -f "$temp_installer"' EXIT
+  
+  # Download the installer
+  if ! curl -s -o "$temp_installer" "$install_url"; then
+    echo "Error: Failed to download the installer." >&2
+    return 1
+  fi
+  
+  # Make the installer executable
+  chmod +x "$temp_installer"
+  
+  # Execute the installer
+  echo "Running installer..."
+  "$temp_installer"
+  
+  # Capture the exit code
+  local exit_code=$?
+  
+  if [ $exit_code -eq 0 ]; then
+    echo "✅ SHH has been successfully updated."
+  else
+    echo "❌ Update failed with exit code: $exit_code"
+    echo "Please check for errors and try again."
+  fi
+  
+  return $exit_code
+}
+
 # Main function to handle the flow of the script
 main() {
   # Parse command line arguments
@@ -512,6 +559,7 @@ main() {
   DETAIL_KEY=""
   CREATE_SECRET=false
   ENV_ONLY=false
+  UPDATE_SHH=false
   
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -542,6 +590,10 @@ main() {
         ENV_ONLY=true
         shift
         ;;
+      -u|--update)
+        UPDATE_SHH=true
+        shift
+        ;;
       --debug)
         DEBUG_MODE=true
         shift
@@ -552,6 +604,12 @@ main() {
         ;;
     esac
   done
+  
+  # If update mode is requested, perform update and exit
+  if [ "$UPDATE_SHH" = true ]; then
+    update_shh
+    exit $?
+  fi
   
   # Check dependencies
   check_dependencies
@@ -635,8 +693,8 @@ echo -n "Would you like to list stored keys in '$SECRET_NAME'? (y/n): "
 if [[ "$LIST_KEYS" =~ ^[Yy]$ ]]; then
       list_keys "$SECRET_NAME" "$REGION"
     else
-      # Display instructions anyway if the user chooses not to list keys
-      display_add_key_instructions "$SECRET_NAME" "$REGION"
+      # Don't display instructions when user chooses not to list keys
+      echo "Exiting without listing keys."
     fi
 fi
 }
