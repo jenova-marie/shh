@@ -10,7 +10,8 @@ YELLOW="\033[38;5;220m"   # Yellow for warnings and important info
 BLUE="\033[38;5;39m"      # Blue for option categories
 CYAN="\033[38;5;87m"      # Cyan for options
 WHITE="\033[97m"          # White for normal text
-ORANGE="\033[38;5;208m"   # Orange for parameter names
+HOTPINK="\033[38;5;198m"  # Hot pink for parameter names (brighter than PINK)
+ORANGE="\033[38;5;208m"   # Orange (deprecated, use HOTPINK instead)
 GRAY="\033[38;5;246m"     # Gray for descriptions
 RED="\033[38;5;196m"      # Bright red for errors
 BOLD="\033[1m"            # Bold text
@@ -27,15 +28,15 @@ usage() {
   echo -e "${PINK}${BOLD}╚════════════════════════════════════════════════╝${RESET}"
   echo ""
   echo -e "${UNDERLINE}${BOLD}USAGE:${RESET}"
-  echo -e "  ${WHITE}$(basename "$0") ${ORANGE}[options] ${ORANGE}<user@host> ${ORANGE}[region]${RESET}"
+  echo -e "  ${WHITE}$(basename "$0") ${HOTPINK}[options] ${HOTPINK}<user@host> ${HOTPINK}[region]${RESET}"
   echo ""
   echo -e "${UNDERLINE}${BOLD}ARGUMENTS:${RESET}"
-  echo -e "  ${ORANGE}user@host${RESET}      ${WHITE}Remote SSH destination${RESET}"
-  echo -e "  ${ORANGE}region${RESET}         ${WHITE}AWS region (uses ${CYAN}SHH_REGION${WHITE} or ${CYAN}AWS_REGION${WHITE} if not specified)${RESET}"
+  echo -e "  ${HOTPINK}user@host${RESET}      ${WHITE}Remote SSH destination${RESET}"
+  echo -e "  ${HOTPINK}region${RESET}         ${WHITE}AWS region (uses ${CYAN}SHH_REGION${WHITE} or ${CYAN}AWS_REGION${WHITE} if not specified)${RESET}"
   echo ""
   echo -e "${BLUE}${BOLD}SHH OPTIONS:${RESET}"
   echo -e "  ${CYAN}-i <key-name>${RESET}  ${WHITE}Specify the SSH key name stored in AWS Secrets Manager${RESET}"
-  echo -e "                 ${GRAY}(default: uses '<username>_ed25519' from user@host)${RESET}"
+  echo -e "                 ${GRAY}(default: tries 'user_host_ed25519' then 'username_ed25519')${RESET}"
   echo -e "  ${CYAN}--debug${RESET}        ${WHITE}Enable verbose debugging output${RESET}"
   echo -e "  ${CYAN}--env${RESET}          ${WHITE}Manage environment variables with shh-env${RESET}"
   echo -e "  ${CYAN}--help${RESET}|${CYAN}-h${RESET}      ${WHITE}Display this help message${RESET}"
@@ -126,7 +127,7 @@ check_shh_environment() {
   
   # If any required variables are missing
   if [ ${#missing_vars[@]} -gt 0 ]; then
-    echo -e "${YELLOW}${BOLD}Error:${RESET} Required environment variable(s) not set: ${ORANGE}${missing_vars[*]}${RESET}" >&2
+    echo -e "${YELLOW}${BOLD}Error:${RESET} Required environment variable(s) not set: ${HOTPINK}${missing_vars[*]}${RESET}" >&2
     echo -e "Would you like to configure these variables now using shh-admin? (y/n): " >&2
     read -r CONFIGURE
     
@@ -303,10 +304,29 @@ fi
 
 # If KEY_NAME is not specified, derive it from username
 if [ -z "$KEY_NAME" ]; then
-  # Extract username from user@host
-  USERNAME=$(echo "$USER_HOST" | cut -d '@' -f 1)
-  KEY_NAME="${USERNAME}_ed25519"
-  debug_log "No key specified, defaulting to '$KEY_NAME'"
+  # First try: Use the full user@host pattern (replacing @ with _)
+  FULL_HOST_KEY=$(echo "$USER_HOST" | tr '@' '_')"_ed25519"
+  debug_log "No key specified, trying full host key pattern '$FULL_HOST_KEY'"
+  
+  # Retrieve the SSH key from AWS Secrets Manager (moved this code up from below)
+  debug_log "Retrieving keys from secret '${SHH_SECRETS}' in region '$REGION'..."
+  SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "${SHH_SECRETS}" --region "$REGION" --query SecretString --output text 2>/dev/null) || {
+    echo -e "${RED}${BOLD}Error:${RESET} Failed to retrieve secret '${CYAN}${SHH_SECRETS}${RESET}' from AWS Secrets Manager in region '${CYAN}$REGION${RESET}'!" >&2
+    echo -e "Please check your AWS credentials and secret configuration." >&2
+    echo -e "Run '${CYAN}shh-admin${RESET}' to manage your AWS secrets." >&2
+    exit 1
+  }
+  
+  # Check if the full host key exists in the secret
+  if echo "$SECRET_JSON" | jq -e --arg key "$FULL_HOST_KEY" 'has($key)' >/dev/null; then
+    KEY_NAME="$FULL_HOST_KEY"
+    debug_log "Found key using full host pattern: '$KEY_NAME'"
+  else
+    # Fallback: Extract username from user@host (original behavior)
+    USERNAME=$(echo "$USER_HOST" | cut -d '@' -f 1)
+    KEY_NAME="${USERNAME}_ed25519"
+    debug_log "Full host key not found, defaulting to username-based key '$KEY_NAME'"
+  fi
 fi
 
 # Export region for AWS CLI
@@ -325,20 +345,32 @@ if ! pgrep -x "ssh-agent" >/dev/null 2>&1; then
   fi
 fi
 
-debug_log "Retrieving key '$KEY_NAME' from secret '${SHH_SECRETS}' in region '$REGION'..."
-
-# Retrieve the SSH key from AWS Secrets Manager
-SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "${SHH_SECRETS}" --region "$REGION" --query SecretString --output text 2>/dev/null) || {
-  echo -e "${RED}${BOLD}Error:${RESET} Failed to retrieve secret '${CYAN}${SHH_SECRETS}${RESET}' from AWS Secrets Manager in region '${CYAN}$REGION${RESET}'!" >&2
-  echo -e "Please check your AWS credentials and secret configuration." >&2
-  echo -e "Run '${CYAN}shh-admin${RESET}' to manage your AWS secrets." >&2
-  exit 1
-}
+# If we already retrieved the secrets above, skip the retrieval
+if [ -z "${SECRET_JSON:-}" ]; then
+  debug_log "Retrieving key '$KEY_NAME' from secret '${SHH_SECRETS}' in region '$REGION'..."
+  
+  # Retrieve the SSH key from AWS Secrets Manager
+  SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "${SHH_SECRETS}" --region "$REGION" --query SecretString --output text 2>/dev/null) || {
+    echo -e "${RED}${BOLD}Error:${RESET} Failed to retrieve secret '${CYAN}${SHH_SECRETS}${RESET}' from AWS Secrets Manager in region '${CYAN}$REGION${RESET}'!" >&2
+    echo -e "Please check your AWS credentials and secret configuration." >&2
+    echo -e "Run '${CYAN}shh-admin${RESET}' to manage your AWS secrets." >&2
+    exit 1
+  }
+else
+  debug_log "Using previously retrieved secret data for key '$KEY_NAME'"
+fi
 
 # Extract private key using jq (base64 encoded)
 SSH_PRIVATE_KEY_B64=$(echo "$SECRET_JSON" | jq -r --arg key "$KEY_NAME" '.[$key] // empty')
 if [ -z "$SSH_PRIVATE_KEY_B64" ]; then
   echo -e "${RED}${BOLD}Error:${RESET} Key '${CYAN}$KEY_NAME${RESET}' not found in secret '${CYAN}${SHH_SECRETS}${RESET}'!" >&2
+  
+  # If we tried the full host pattern key and it failed, suggest it might not exist yet
+  if [[ "$KEY_NAME" == $(echo "$USER_HOST" | tr '@' '_')"_ed25519" ]]; then
+    echo -e "${YELLOW}${BOLD}Note:${RESET} No key found for the full host pattern. You may need to create it." >&2
+    echo -e "Run '${CYAN}shh-admin --gen${RESET}' to generate a new key for this host." >&2
+  fi
+  
   if [ "$DEBUG_MODE" = true ]; then
     echo -e "${BLUE}${BOLD}Available keys:${RESET}" >&2
     echo "$SECRET_JSON" | jq -r 'keys[]' | grep -v "\.pub$" | grep -v "\.meta$" | grep -v "\.fp$" | sort >&2
