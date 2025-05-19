@@ -150,7 +150,7 @@ REGION=""
 SSH_OPTS=()
 
 # Add default SSH options
-SSH_OPTS+=("-o" "StrictHostKeyChecking=no")
+SSH_OPTS+=("-A""-o" "StrictHostKeyChecking=no")
 
 # Complete list of SSH options that take an argument
 SSH_OPTS_WITH_ARG=(
